@@ -1,6 +1,6 @@
 set -x
 
-MODEL_PATH=Qwen/Qwen3-VL-8B-Instruct  # replace with your local path if needed
+MODEL_PATH=Qwen/Qwen3-VL-4B-Instruct  # replace with your local path if needed
 
 SYSTEM_PROMPT=""""""
 
@@ -13,7 +13,7 @@ python3 -m verl.trainer.main \
     worker.rollout.tensor_parallel_size=1 \
     worker.rollout.enable_chunked_prefill=false \
     worker.reward.compute_score=r1gui \
-    trainer.experiment_name=qwen3_vl_8b_guir1_grpo \
+    trainer.experiment_name=qwen3_vl_4b_guir1_grpo \
     trainer.n_gpus_per_node=8 \
     data.max_pixels=1258291 \
     data.max_prompt_length=2048 \
