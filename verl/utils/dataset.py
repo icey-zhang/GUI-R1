@@ -157,52 +157,151 @@ def _convert_gt_bbox_to_absolute(gt_bbox: Any, width: int, height: int) -> List[
     return bbox
 
 
+def _normalize_gt_params(gt_params: Any) -> Dict[str, str]:
+    if isinstance(gt_params, dict):
+        return {str(k): str(v) for k, v in gt_params.items()}
+    if isinstance(gt_params, str) and gt_params.strip():
+        try:
+            obj = json.loads(gt_params)
+            if isinstance(obj, dict):
+                return {str(k): str(v) for k, v in obj.items()}
+        except Exception:
+            return {}
+    return {}
+
+
+def _point_str_from_bbox(gt_bbox: List[float]) -> str:
+    if len(gt_bbox) == 2:
+        return f"{int(round(gt_bbox[0]))},{int(round(gt_bbox[1]))}"
+    if len(gt_bbox) == 4:
+        x = (gt_bbox[0] + gt_bbox[2]) / 2.0
+        y = (gt_bbox[1] + gt_bbox[3]) / 2.0
+        return f"{int(round(x))},{int(round(y))}"
+    return "-100,-100"
+
+
+def _derive_gt_params(action: str, gt_bbox: List[float], gt_input_text: str) -> Dict[str, str]:
+    action = str(action).strip().lower()
+    if action in {"click", "long_press"}:
+        return {"point": _point_str_from_bbox(gt_bbox)}
+    if action == "swipe":
+        return {"direction": str(gt_input_text)}
+    if action == "type":
+        return {"content": str(gt_input_text)}
+    if action == "open_app":
+        return {"app_name": str(gt_input_text)}
+    if action == "wait":
+        return {"t": str(gt_input_text)}
+    if action in {"finished", "call_user", "back_information", "complete"}:
+        return {"content": str(gt_input_text)}
+    return {}
+
+
+def _escape_action_str(value: str) -> str:
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+        .replace("'", "\\'")
+    )
+
+
+def _build_action_call(action: str, params: Dict[str, str]) -> str:
+    action = str(action).strip().lower()
+    if action in {"click", "long_press"}:
+        point = params.get("point", "-100,-100")
+        return f"{action}(point='{_escape_action_str(point)}')"
+    if action in {"swipe", "drag"}:
+        start_point = params.get("start_point")
+        end_point = params.get("end_point")
+        if start_point and end_point:
+            if action == "swipe":
+                try:
+                    velocity_val = float(params.get("velocity", "600"))
+                    velocity = str(int(velocity_val)) if abs(velocity_val - int(velocity_val)) < 1e-6 else str(velocity_val)
+                except Exception:
+                    velocity = "600"
+                return (
+                    f"swipe(start_point='{_escape_action_str(start_point)}', "
+                    f"end_point='{_escape_action_str(end_point)}', velocity={velocity})"
+                )
+            return (
+                f"drag(start_point='{_escape_action_str(start_point)}', "
+                f"end_point='{_escape_action_str(end_point)}')"
+            )
+    if action == "type":
+        content = params.get("content", "")
+        return f"type(content='{_escape_action_str(content)}')"
+    if action == "open_app":
+        app_name = params.get("app_name", "")
+        return f"open_app(app_name='{_escape_action_str(app_name)}')"
+    if action == "wait":
+        t = params.get("t", "1")
+        return f"wait(t='{_escape_action_str(t)}')"
+    if action in {"finished", "call_user", "back_information", "complete"}:
+        content = params.get("content", "")
+        final_action = "finished" if action == "complete" else action
+        return f"{final_action}(content='{_escape_action_str(content)}')"
+    if action == "press_home":
+        return "press_home()"
+    if action == "press_back":
+        return "press_back()"
+    return f"{action}()"
+
+
 def _build_prompt(instruction: str, history: str, task_type: str) -> str:
     if task_type == "high":
         action_space = [
-            "complete",
-            "close/delete",
-            "press_home",
             "click",
-            "press_back",
+            "long_press",
             "type",
-            "select",
-            "scroll",
-            "enter",
+            "swipe",
             "open_app",
+            "drag",
+            "press_home",
+            "press_back",
             "wait",
+            "finished",
+            "call_user",
+            "back_information",
         ]
         return (
             f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue "
             f"executing the command '{instruction}', with the action history being '{history}'.\n"
-            f"Please provide the action to perform (enumerate from {action_space}), the point where the cursor is moved "
-            f"to (integer) if a click is performed, and any input text required to complete the action.\n"
+            f"Please output exactly ONE action call from {action_space} using hm_data format.\n"
             "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as "
             "follows:\n"
-            "<think> ... </think> <answer>[{'action': enum[action_space], 'point': [x, y], "
-            "'input_text': 'no input text [default]'}]</answer>\n"
-            "Note:\n specific input text (no default) is necessary for actions enum['type', 'select', 'open_app'] \n"
-            "for action enum['scroll'], input_text must be enum['up', 'left', 'right', 'down'].\n"
+            "<think> ... </think> <answer>action(params...)</answer>\n"
+            "Available actions and signatures:\n"
+            "click(point='x1,y1')\n"
+            "long_press(point='x1,y1')\n"
+            "type(content='')\n"
+            "swipe(start_point='x1,y1', end_point='x2,y2', velocity=600)\n"
+            "open_app(app_name='')\n"
+            "drag(start_point='x1,y1', end_point='x2,y2')\n"
+            "press_home()\n"
+            "press_back()\n"
+            "wait(t='t')\n"
+            "finished(content='')\n"
+            "call_user(content='')\n"
+            "back_information(content='')\n"
             "Examples:\n"
-            "[{'action': enum['complete', 'close/delete', 'press_home', 'press_back', 'enter', 'wait'], "
-            "'point': [-100, -100], 'input_text': 'no input text'}]\n"
-            "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
-            "[{'action': enum['type', 'select', 'open_app'], 'point': [-100, -100], 'input_text': "
-            "'shanghai shopping mall'}]\n"
-            "[{'action': enum['scroll'], 'point': [-100, -100], 'input_text': enum['up', 'left', 'right', 'down']}]"
+            "<answer>click(point='123,300')</answer>\n"
+            "<answer>type(content='蒜蓉小龙虾\\n')</answer>\n"
+            "<answer>finished(content='任务已完成')</answer>"
         )
 
     return (
         f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue "
         f"executing the command '{instruction}', with the action history being '{history}'.\n"
-        "Please provide the action to perform (enumerate from ['click']), the point where the cursor is moved to "
-        "(integer) if a click is performed, and any input text required to complete the action.\n"
+        "Please output exactly one action call in hm_data format.\n"
         "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as "
         "follows:\n"
-        "<think> ... </think> <answer>[{'action': enum['click'], 'point': [x, y], 'input_text': "
-        "'no input text'}]</answer>\n"
+        "<think> ... </think> <answer>click(point='x1,y1')</answer>\n"
         "Example:\n"
-        "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
+        "<answer>click(point='123,300')</answer>\n"
     )
 
 
@@ -267,10 +366,21 @@ class RLHFDataset(Dataset):
 
         width, height = images[0].size
         gt_bbox_abs = _convert_gt_bbox_to_absolute(row_dict.get("gt_bbox", [-100, -100]), width, height)
+        gt_action = str(row_dict.get("gt_action", "click"))
+        gt_input_text = str(row_dict.get("gt_input_text", "no input text"))
+        gt_params = _normalize_gt_params(row_dict.get("gt_params", {}))
+        if not gt_params:
+            gt_params = _derive_gt_params(gt_action, gt_bbox_abs, gt_input_text)
+        gt_action_call = str(row_dict.get("gt_action_call", "")).strip()
+        if not gt_action_call:
+            gt_action_call = _build_action_call(gt_action, gt_params)
+
         gt = {
-            "action": str(row_dict.get("gt_action", "click")),
+            "action": gt_action,
             "gt_bbox": gt_bbox_abs,
-            "input_text": str(row_dict.get("gt_input_text", "no input text")),
+            "input_text": gt_input_text,
+            "gt_params": gt_params,
+            "action_call": gt_action_call,
         }
 
         prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)

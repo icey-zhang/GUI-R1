@@ -16,8 +16,9 @@
 """
 Convert Open-AutoGLM hm_data trajectories into GUI-R1 training jsonl files.
 
-Output schema is aligned with `verl/utils/dataset.py`:
-    instruction, history, task_type, image, gt_bbox, gt_action, gt_input_text
+Output schema is aligned with `verl/utils/dataset.py` and keeps hm_data action style:
+    instruction, history, task_type, image, gt_bbox, gt_action, gt_input_text,
+    gt_params, gt_action_call
 """
 
 import argparse
@@ -32,16 +33,80 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 from PIL import Image
 
 
-POINT_RE = re.compile(r"<point>\s*([0-9]+(?:\.[0-9]+)?)\s+([0-9]+(?:\.[0-9]+)?)\s*</point>")
+POINT_TAG_RE = re.compile(r"<point>\s*([0-9]+(?:\.[0-9]+)?)\s+([0-9]+(?:\.[0-9]+)?)\s*</point>")
+POINT_CSV_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*$")
 
 
-def parse_point_tag(point_text: str) -> Optional[Tuple[float, float]]:
-    if not isinstance(point_text, str):
+def _quote_for_action(value: str) -> str:
+    escaped = (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+        .replace("'", "\\'")
+    )
+    return f"'{escaped}'"
+
+
+def _sanitize_action_call(action_call: str) -> str:
+    if not isinstance(action_call, str):
+        return ""
+    return (
+        action_call.replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+
+
+def _normalize_velocity(value: Any, default: str = "600") -> str:
+    try:
+        v = float(value)
+    except Exception:
+        return default
+    if v <= 0:
+        return default
+    if abs(v - int(v)) < 1e-6:
+        return str(int(v))
+    return str(v)
+
+
+def parse_point_value(value: Any) -> Optional[Tuple[float, float]]:
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        try:
+            return float(value[0]), float(value[1])
+        except Exception:
+            return None
+
+    if isinstance(value, str):
+        m = POINT_TAG_RE.search(value)
+        if m:
+            return float(m.group(1)), float(m.group(2))
+        m = POINT_CSV_RE.match(value)
+        if m:
+            return float(m.group(1)), float(m.group(2))
+    return None
+
+
+def to_pixel_point(point: Tuple[float, float], width: int, height: int) -> Tuple[float, float]:
+    x, y = point
+    if x <= 1.5 and y <= 1.5:
+        x, y = x * width, y * height
+    elif x > width * 1.2 or y > height * 1.2:
+        # Heuristic: some points are on 0-1000 grid.
+        if 0 <= x <= 1000 and 0 <= y <= 1000:
+            x, y = x / 1000.0 * width, y / 1000.0 * height
+    x = max(0.0, min(float(width - 1), float(x)))
+    y = max(0.0, min(float(height - 1), float(y)))
+    return x, y
+
+
+def parse_point_to_pixel(value: Any, width: int, height: int) -> Optional[Tuple[float, float]]:
+    point = parse_point_value(value)
+    if point is None:
         return None
-    m = POINT_RE.search(point_text)
-    if not m:
-        return None
-    return float(m.group(1)), float(m.group(2))
+    return to_pixel_point(point, width, height)
 
 
 def to_normalized_xy(x: float, y: float, width: int, height: int) -> list[float]:
@@ -71,67 +136,135 @@ def infer_swipe_direction(start_point: Optional[Tuple[float, float]], end_point:
     return "down" if dy >= 0 else "up"
 
 
+def point_to_string(point: Optional[Tuple[float, float]]) -> str:
+    if point is None:
+        return "-100,-100"
+    return f"{int(round(point[0]))},{int(round(point[1]))}"
+
+
+def parse_box_to_norm(box: Any, width: int, height: int) -> Optional[list[float]]:
+    if not (isinstance(box, dict) and isinstance(box.get("point"), list)):
+        return None
+    p = box["point"]
+    try:
+        if len(p) == 2:
+            p1 = to_pixel_point((float(p[0]), float(p[1])), width, height)
+            return to_normalized_xy(p1[0], p1[1], width, height)
+        if len(p) == 4:
+            p1 = to_pixel_point((float(p[0]), float(p[1])), width, height)
+            p2 = to_pixel_point((float(p[2]), float(p[3])), width, height)
+            x1, y1 = min(p1[0], p2[0]), min(p1[1], p2[1])
+            x2, y2 = max(p1[0], p2[0]), max(p1[1], p2[1])
+            return to_normalized_bbox([x1, y1, x2, y2], width, height)
+    except Exception:
+        return None
+    return None
+
+
 def map_action(
+    action_raw: str,
     action_parsed: Dict[str, Any],
     box: Any,
     image_size: Tuple[int, int],
-) -> Tuple[str, list[float], str]:
+) -> Tuple[str, list[float], str, Dict[str, str], str]:
     width, height = image_size
-    action = action_parsed.get("action")
+    action_raw = _sanitize_action_call(action_raw)
+    action = str(action_parsed.get("action", "")).strip()
     params = action_parsed.get("params", {}) or {}
 
     # Default values for non-grounding actions.
     default_bbox = [-100.0, -100.0]
     default_text = "no input text"
 
-    if action in ("finished", "call_user", "back_information"):
-        content = params.get("content") or params.get("message") or "task completed"
-        return "complete", default_bbox, str(content)
+    if action in ("click", "long_press"):
+        point_px = parse_point_to_pixel(params.get("point"), width, height)
+        bbox_norm = parse_box_to_norm(box, width, height)
+        if point_px is None and bbox_norm is not None and len(bbox_norm) == 4:
+            x = (bbox_norm[0] + bbox_norm[2]) / 2.0 * width
+            y = (bbox_norm[1] + bbox_norm[3]) / 2.0 * height
+            point_px = (x, y)
+        if point_px is None and bbox_norm is not None and len(bbox_norm) == 2:
+            point_px = (bbox_norm[0] * width, bbox_norm[1] * height)
+        if bbox_norm is None and point_px is not None:
+            bbox_norm = to_normalized_xy(point_px[0], point_px[1], width, height)
 
-    if action == "open_app":
-        app_name = params.get("app_name") or params.get("content") or "unknown app"
-        return "open_app", default_bbox, str(app_name)
-
-    if action == "click":
-        # Prefer detection/grounding box from trace.
-        if isinstance(box, dict) and isinstance(box.get("point"), list):
-            p = box["point"]
-            if len(p) == 4:
-                return "click", to_normalized_bbox([float(v) for v in p], width, height), default_text
-            if len(p) == 2:
-                return "click", to_normalized_bbox([float(v) for v in p], width, height), default_text
-
-        # Fallback to model point string (<point>x y</point>), often in 1000-grid coordinates.
-        point_text = params.get("point")
-        point = parse_point_tag(point_text)
-        if point is not None:
-            x, y = point
-            if x > width or y > height:
-                # Heuristic: many action points use 0-1000 normalized grid.
-                return "click", [max(0.0, min(1.0, x / 1000.0)), max(0.0, min(1.0, y / 1000.0))], default_text
-            return "click", to_normalized_xy(x, y, width, height), default_text
-
-        return "click", default_bbox, default_text
+        point_str = point_to_string(point_px)
+        gt_params = {"point": point_str}
+        action_call = action_raw or f"{action}(point={_quote_for_action(point_str)})"
+        return action, bbox_norm or default_bbox, default_text, gt_params, action_call
 
     if action == "type":
-        content = params.get("content") or "unknown"
-        return "type", default_bbox, str(content)
+        content = str(params.get("content") or "")
+        gt_params = {"content": content}
+        action_call = action_raw or f"type(content={_quote_for_action(content)})"
+        return "type", default_bbox, content, gt_params, action_call
+
+    if action == "open_app":
+        app_name = str(params.get("app_name") or "")
+        gt_params = {"app_name": app_name}
+        action_call = action_raw or f"open_app(app_name={_quote_for_action(app_name)})"
+        return "open_app", default_bbox, app_name, gt_params, action_call
 
     if action == "swipe":
-        start_point = parse_point_tag(params.get("start_point"))
-        end_point = parse_point_tag(params.get("end_point"))
-        direction = infer_swipe_direction(start_point, end_point)
-        return "scroll", default_bbox, direction
+        start_px = parse_point_to_pixel(params.get("start_point"), width, height)
+        end_px = parse_point_to_pixel(params.get("end_point"), width, height)
+        velocity = _normalize_velocity(params.get("velocity"), default="600")
+
+        if start_px is None:
+            start_px = (width * 0.5, height * 0.8)
+        if end_px is None:
+            end_px = (width * 0.5, height * 0.2)
+
+        start_str = point_to_string(start_px)
+        end_str = point_to_string(end_px)
+        direction = infer_swipe_direction(start_px, end_px)
+        gt_params = {"start_point": start_str, "end_point": end_str, "velocity": velocity}
+        action_call = action_raw or (
+            "swipe("
+            f"start_point={_quote_for_action(start_str)}, "
+            f"end_point={_quote_for_action(end_str)}, "
+            f"velocity={velocity})"
+        )
+        return "swipe", default_bbox, direction, gt_params, action_call
+
+    if action == "drag":
+        start_px = parse_point_to_pixel(params.get("start_point"), width, height)
+        end_px = parse_point_to_pixel(params.get("end_point"), width, height)
+        if start_px is None:
+            start_px = (width * 0.5, height * 0.8)
+        if end_px is None:
+            end_px = (width * 0.5, height * 0.2)
+        start_str = point_to_string(start_px)
+        end_str = point_to_string(end_px)
+        gt_params = {"start_point": start_str, "end_point": end_str}
+        action_call = action_raw or (
+            f"drag(start_point={_quote_for_action(start_str)}, end_point={_quote_for_action(end_str)})"
+        )
+        return "drag", default_bbox, default_text, gt_params, action_call
+
+    if action == "press_home":
+        return "press_home", default_bbox, default_text, {}, "press_home()"
 
     if action == "press_back":
-        return "press_back", default_bbox, default_text
+        return "press_back", default_bbox, default_text, {}, "press_back()"
 
     if action == "wait":
-        wait_t = params.get("t")
-        return "wait", default_bbox, str(wait_t if wait_t is not None else "1")
+        wait_t = str(params.get("t") if params.get("t") is not None else "1")
+        gt_params = {"t": wait_t}
+        action_call = action_raw or f"wait(t={_quote_for_action(wait_t)})"
+        return "wait", default_bbox, wait_t, gt_params, action_call
 
-    # Unknown actions are mapped to complete to keep training robust.
-    return "complete", default_bbox, default_text
+    if action in ("finished", "call_user", "back_information"):
+        content = str(params.get("content") or params.get("message") or "")
+        gt_params = {"content": content}
+        action_call = action_raw or f"{action}(content={_quote_for_action(content)})"
+        return action, default_bbox, content, gt_params, action_call
+
+    # Unknown actions fallback.
+    content = str(params.get("content") or "")
+    gt_params = {"content": content}
+    action_call = action_raw or f"finished(content={_quote_for_action(content)})"
+    return "finished", default_bbox, content or default_text, gt_params, action_call
 
 
 def stringify_history(history: Any) -> str:
@@ -185,7 +318,12 @@ def iter_episode_records(episode_dir: Path) -> Iterable[Dict[str, Any]]:
             except Exception:
                 continue
 
-            gt_action, gt_bbox, gt_input_text = map_action(action_parsed, row.get("box"), (width, height))
+            gt_action, gt_bbox, gt_input_text, gt_params, gt_action_call = map_action(
+                str(row.get("action_raw") or ""),
+                action_parsed,
+                row.get("box"),
+                (width, height),
+            )
 
             yield {
                 "instruction": instruction,
@@ -195,6 +333,8 @@ def iter_episode_records(episode_dir: Path) -> Iterable[Dict[str, Any]]:
                 "gt_bbox": gt_bbox,
                 "gt_action": gt_action,
                 "gt_input_text": gt_input_text,
+                "gt_params": gt_params,
+                "gt_action_call": gt_action_call,
                 "source_task_id": str(traj.get("task_id", "")) if isinstance(traj, dict) else "",
                 "source_step": int(row.get("step", 0) or 0),
             }
