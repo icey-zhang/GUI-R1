@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import math
 import os
 from collections import defaultdict
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
@@ -29,7 +31,7 @@ from transformers import PreTrainedTokenizer, ProcessorMixin
 from ..models.transformers.qwen2_vl import get_rope_index as get_qwen2_vl_rope_index
 from ..models.transformers.qwen3_vl import get_rope_index as get_qwen3_vl_rope_index
 from . import torch_functional as VF
-import json
+
 
 def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     tensors = defaultdict(list)
@@ -50,11 +52,12 @@ def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {**tensors, **non_tensors}
 
 
-def process_image(image: Union[Dict[str, Any], ImageObject], max_pixels: int, min_pixels: int) -> ImageObject:
+def process_image(image: Union[Dict[str, Any], ImageObject, str], max_pixels: int, min_pixels: int) -> ImageObject:
     if isinstance(image, dict):
         image = Image.open(BytesIO(image["bytes"]))
     if isinstance(image, str):
         image = Image.open(image)
+
     if (image.width * image.height) > max_pixels:
         resize_factor = math.sqrt(max_pixels / (image.width * image.height))
         width, height = int(image.width * resize_factor), int(image.height * resize_factor)
@@ -101,9 +104,111 @@ def _get_vl_rope_index(
     )
 
 
+def _load_local_dataset(data_path: str):
+    path = Path(data_path)
+    if path.is_dir():
+        parquet_files = sorted(path.glob("*.parquet"))
+        if parquet_files:
+            return load_dataset("parquet", data_dir=str(path), split="train")
+        json_files = sorted(path.glob("*.jsonl")) + sorted(path.glob("*.json"))
+        if json_files:
+            return load_dataset("json", data_files=[str(x) for x in json_files], split="train")
+        raise ValueError(f"No supported dataset files found in {data_path}. Expected *.parquet or *.jsonl/*.json.")
+
+    suffix = path.suffix.lower()
+    if suffix == ".parquet":
+        return load_dataset("parquet", data_files=str(path), split="train")
+    if suffix in {".jsonl", ".json"}:
+        return load_dataset("json", data_files=str(path), split="train")
+    raise ValueError(f"Unsupported dataset file suffix: {suffix} ({data_path})")
+
+
+def _stringify_history(history: Any) -> str:
+    if isinstance(history, list):
+        return " | ".join(str(x) for x in history)
+    if history is None:
+        return ""
+    return str(history)
+
+
+def _to_image_list(row_dict: Dict[str, Any], image_key: str) -> List[Any]:
+    image_value = row_dict.get(image_key, row_dict.get("image", row_dict.get("images")))
+    if image_value is None:
+        raise ValueError(f"No image found in row. Tried keys: {image_key}, image, images")
+    if isinstance(image_value, list):
+        return image_value
+    return [image_value]
+
+
+def _convert_gt_bbox_to_absolute(gt_bbox: Any, width: int, height: int) -> List[float]:
+    if not isinstance(gt_bbox, list):
+        return [-100.0, -100.0]
+    if len(gt_bbox) not in (2, 4):
+        return [-100.0, -100.0]
+
+    bbox = [float(v) for v in gt_bbox]
+    # Heuristic: normalized bbox/point in [0, 1] -> convert to pixels.
+    if max(abs(v) for v in bbox) <= 1.5:
+        bbox[0] *= width
+        bbox[1] *= height
+        if len(bbox) == 4:
+            bbox[2] *= width
+            bbox[3] *= height
+    return bbox
+
+
+def _build_prompt(instruction: str, history: str, task_type: str) -> str:
+    if task_type == "high":
+        action_space = [
+            "complete",
+            "close/delete",
+            "press_home",
+            "click",
+            "press_back",
+            "type",
+            "select",
+            "scroll",
+            "enter",
+            "open_app",
+            "wait",
+        ]
+        return (
+            f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue "
+            f"executing the command '{instruction}', with the action history being '{history}'.\n"
+            f"Please provide the action to perform (enumerate from {action_space}), the point where the cursor is moved "
+            f"to (integer) if a click is performed, and any input text required to complete the action.\n"
+            "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as "
+            "follows:\n"
+            "<think> ... </think> <answer>[{'action': enum[action_space], 'point': [x, y], "
+            "'input_text': 'no input text [default]'}]</answer>\n"
+            "Note:\n specific input text (no default) is necessary for actions enum['type', 'select', 'open_app'] \n"
+            "for action enum['scroll'], input_text must be enum['up', 'left', 'right', 'down'].\n"
+            "Examples:\n"
+            "[{'action': enum['complete', 'close/delete', 'press_home', 'press_back', 'enter', 'wait'], "
+            "'point': [-100, -100], 'input_text': 'no input text'}]\n"
+            "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
+            "[{'action': enum['type', 'select', 'open_app'], 'point': [-100, -100], 'input_text': "
+            "'shanghai shopping mall'}]\n"
+            "[{'action': enum['scroll'], 'point': [-100, -100], 'input_text': enum['up', 'left', 'right', 'down']}]"
+        )
+
+    return (
+        f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue "
+        f"executing the command '{instruction}', with the action history being '{history}'.\n"
+        "Please provide the action to perform (enumerate from ['click']), the point where the cursor is moved to "
+        "(integer) if a click is performed, and any input text required to complete the action.\n"
+        "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as "
+        "follows:\n"
+        "<think> ... </think> <answer>[{'action': enum['click'], 'point': [x, y], 'input_text': "
+        "'no input text'}]</answer>\n"
+        "Example:\n"
+        "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
+    )
+
+
 class RLHFDataset(Dataset):
     """
-    We assume the dataset contains a column that contains prompts and other information
+    We assume the dataset contains a column that contains prompts and other information.
     """
 
     def __init__(
@@ -135,12 +240,9 @@ class RLHFDataset(Dataset):
             data_path, data_split = data_path.split("@")
         else:
             data_split = "train"
-            # print(data_path)
 
-        if os.path.isdir(data_path):
-            self.dataset = load_dataset("parquet", data_dir=data_path, split="train")
-        elif os.path.isfile(data_path):
-            self.dataset = load_dataset("parquet", data_files=data_path, split="train")
+        if os.path.isdir(data_path) or os.path.isfile(data_path):
+            self.dataset = _load_local_dataset(data_path)
         else:  # remote dataset
             self.dataset = load_dataset(data_path, split=data_split)
 
@@ -148,75 +250,45 @@ class RLHFDataset(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, index):
-        row_dict: dict = self.dataset[index]
+        row_dict: dict = dict(self.dataset[index])
+        row_dict.pop("verify_bbox", None)
+        row_dict.pop("success_rate", None)
+        row_dict.pop("scale", None)
 
-        # prompt_str: str = row_dict[self.prompt_key]
-        text=row_dict['instruction']
-        history=row_dict['history']
-        task_type=row_dict['task_type']
-        row_dict.pop('verify_bbox', None)
-        row_dict.pop('success_rate', None)
-        row_dict.pop('scale', None)
-        images=[row_dict['image']]
-      
-        if task_type=='high':
-            prompt_str=  (
-                f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
-                "Please provide the action to perform (enumerate from ['complete', 'close/delete', 'press_home', 'click', 'press_back', 'type', 'select', 'scroll', 'enter']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
-                "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:\n"
-                "<think> ... </think> <answer>[{'action': enum['complete', 'close/delete', 'press_home', 'click', 'press_back', 'type', 'select', 'scroll', 'enter'], 'point': [x, y], 'input_text': 'no input text [default]'}]</answer>\n"
-                "Note:\n specific input text (no default) is necessary for actions enum['type', 'select', 'scroll'] \n Example:\n"
-                "[{'action': enum['complete', 'close/delete', 'press_home', 'press_back', 'enter'], 'point': [-100, -100], 'input_text': 'no input text'}]\n"
-                "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
-                "[{'action': enum['type', 'select'], 'point': [-100, -100], 'input_text': 'shanghai shopping mall'}]\n"
-                "[{'action': enum['scroll'], 'point': [-100, -100], 'input_text': enum['up', 'left', 'right', 'down']}]"
-            )
-        else:
-            prompt_str=(
-                f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
-                "Please provide the action to perform (enumerate from ['click']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
-                "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:\n"
-                "<think> ... </think> <answer>[{'action': enum[ 'click'], 'point': [x, y], 'input_text': 'no input text'}]</answer>\n"
-                "Example:\n"
-                "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
-            )
+        instruction = str(row_dict.get("instruction", row_dict.get("task", "")))
+        history = _stringify_history(row_dict.get("history", ""))
+        task_type = str(row_dict.get("task_type", "high"))
+
+        prompt_str = _build_prompt(instruction=instruction, history=history, task_type=task_type)
         messages = [{"role": "user", "content": prompt_str}]
-        images=[process_image(image, self.max_pixels, self.min_pixels) for image in images]
 
-        scalex,scaley=images[0].size
-        gt_bbox=row_dict['gt_bbox']
-        gt_bbox[0]*=scalex
-        gt_bbox[1]*=scaley
-        if len(gt_bbox)>2:
-            gt_bbox[2]*=scalex
-            gt_bbox[3]*=scaley
+        images = _to_image_list(row_dict, self.image_key)
+        images = [process_image(image, self.max_pixels, self.min_pixels) for image in images]
 
-        gt={'action': row_dict['gt_action'],'gt_bbox': gt_bbox,'input_text': row_dict['gt_input_text']}
-        # if self.system_prompt:
-        #     messages.insert(0, {"role": "system", "content": self.system_prompt})
+        width, height = images[0].size
+        gt_bbox_abs = _convert_gt_bbox_to_absolute(row_dict.get("gt_bbox", [-100, -100]), width, height)
+        gt = {
+            "action": str(row_dict.get("gt_action", "click")),
+            "gt_bbox": gt_bbox_abs,
+            "input_text": str(row_dict.get("gt_input_text", "no input text")),
+        }
 
         prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-
-        # if self.image_key in row_dict:
         prompt = prompt.replace("<image>", "<|vision_start|><|image_pad|><|vision_end|>")
-        row_dict["multi_modal_data"] = {
-            "image": images
-        }
+
+        row_dict["multi_modal_data"] = {"image": images}
         model_inputs = self.processor(row_dict["multi_modal_data"]["image"], prompt, return_tensors="pt")
+
         input_ids = model_inputs.pop("input_ids")[0]
         attention_mask = model_inputs.pop("attention_mask")[0]
         row_dict["multi_modal_inputs"] = dict(model_inputs)
+
         position_ids = _get_vl_rope_index(
             self.processor,
             input_ids=input_ids,
             attention_mask=attention_mask,
             model_inputs=model_inputs,
         )  # (3, seq_length)
-        # else:
-        #     model_inputs = self.tokenizer([prompt], add_special_tokens=False, return_tensors="pt")
-        #     input_ids = model_inputs.pop("input_ids")[0]
-        #     attention_mask = model_inputs.pop("attention_mask")[0]
-        #     position_ids = torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None)  # (seq_length,)
 
         input_ids, attention_mask, position_ids = VF.postprocess_data(
             input_ids=input_ids,
@@ -231,5 +303,5 @@ class RLHFDataset(Dataset):
         row_dict["attention_mask"] = attention_mask
         row_dict["position_ids"] = position_ids
         row_dict["raw_prompt_ids"] = self.tokenizer.encode(prompt, add_special_tokens=False)
-        row_dict["ground_truth"] = json.dumps(gt)
+        row_dict["ground_truth"] = json.dumps(gt, ensure_ascii=False)
         return row_dict

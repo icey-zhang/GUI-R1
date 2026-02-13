@@ -31,7 +31,7 @@ def calculate_f1_score(predicted_str, ground_truth_str):
 
 def extract_action(content):
     answer_tag_pattern = r'<answer>(.*?)</answer>'
-    action_pattern = r"'action':\s*'(\w+)'"
+    action_pattern = r"'action':\s*'([^']+)'"
     content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
     if content_answer_match:
         content_answer = content_answer_match.group(1).strip()

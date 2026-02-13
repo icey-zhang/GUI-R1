@@ -1,14 +1,6 @@
-# GUI-R1（Qwen3-VL 适配版）
+# GUI-R1（Qwen3-VL 适配 + hm_data 训练）
 
-本仓库是 GUI-R1 在 `verl` 训练链路上的 Qwen3-VL 适配版本，目标是直接可运行训练与评测。
-
-## 主要改动
-
-- 适配 `Qwen3-VL` 的 RoPE 位置编码处理。
-- 扩展 tokenizer/processor 流程，支持 `Qwen3VLProcessor`。
-- 更新数据处理逻辑，使 Qwen2-VL / Qwen3-VL 共用多模态输入路径。
-- 增加 Qwen3-VL 训练脚本：`examples/qwen3_vl_8b_gui_grpo.sh`。
-- 更新依赖版本（`transformers>=4.57.0`，`vllm>=0.8.5`）。
+本仓库已适配 `Qwen3-VL`，并支持将 Open-AutoGLM 的 `hm_data` 转换为 GUI-R1/verl 可训练格式。
 
 ## 环境准备
 
@@ -19,32 +11,43 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
-## 数据准备
+## 新数据集转换（hm_data -> jsonl）
 
-将 GUI-R1 数据集放到如下目录（示例）：
-
-```text
-datasets/GUI-R1/train.parquet
-datasets/GUI-R1/test.parquet
+```bash
+python scripts/convert_hm_data.py \
+  --input_dir /Users/zhangjiaqing/Documents/agent/Open-AutoGLM/hm_data \
+  --output_dir /Users/zhangjiaqing/Documents/agent/datasets/hm_data_converted \
+  --test_ratio 0.05 \
+  --seed 42
 ```
+
+输出：
+- `train.jsonl`
+- `test.jsonl`
+
+字段包含：
+- `instruction`
+- `history`
+- `task_type`
+- `image`
+- `gt_bbox`
+- `gt_action`
+- `gt_input_text`
 
 ## 训练（Qwen3-VL）
 
-```bash
-bash examples/qwen3_vl_8b_gui_grpo.sh
-```
-
-如需使用本地模型路径，修改脚本中的 `MODEL_PATH`。
-
-## 推理与评测
+8B：
 
 ```bash
-cd guir1
-bash inference.sh
-bash eval.sh
+bash examples/qwen3_vl_8b_hm_data_grpo.sh
 ```
 
-## 说明
+4B：
 
-- 当前仓库已包含可运行主代码。
-- 若需进一步适配 Qwen3-VL-MoE 或更高版本 vLLM，可在此基础上继续扩展。
+```bash
+bash examples/qwen3_vl_4b_hm_data_grpo.sh
+```
+
+说明：
+- 训练脚本里已设置 `worker.rollout.tensor_parallel_size=1`，避免 Qwen3-VL 在 vLLM rollout 下的 TP 报错。
+- 如使用本地模型，修改脚本中的 `MODEL_PATH` 即可。
