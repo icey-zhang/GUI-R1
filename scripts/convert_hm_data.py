@@ -16,9 +16,8 @@
 """
 Convert Open-AutoGLM hm_data trajectories into GUI-R1 training jsonl files.
 
-Output schema is aligned with `verl/utils/dataset.py` and keeps hm_data action style:
-    instruction, history, task_type, image, gt_bbox, gt_action, gt_input_text,
-    gt_params, gt_action_call
+Output schema is aligned with `verl/utils/dataset.py` and keeps hm_data action style.
+All grounding coordinates are normalized to a 0-1000 relative coordinate system.
 """
 
 import argparse
@@ -80,50 +79,39 @@ def parse_point_value(value: Any) -> Optional[Tuple[float, float]]:
             return None
 
     if isinstance(value, str):
+        s = value.strip()
         m = POINT_TAG_RE.search(value)
         if m:
             return float(m.group(1)), float(m.group(2))
-        m = POINT_CSV_RE.match(value)
+        m = POINT_CSV_RE.match(s)
         if m:
             return float(m.group(1)), float(m.group(2))
+        nums = re.findall(r"([0-9]+(?:\.[0-9]+)?)", s)
+        if len(nums) >= 2:
+            return float(nums[0]), float(nums[1])
     return None
 
 
-def to_pixel_point(point: Tuple[float, float], width: int, height: int) -> Tuple[float, float]:
+def to_1000_point(point: Tuple[float, float], width: int, height: int) -> Tuple[float, float]:
     x, y = point
     if x <= 1.5 and y <= 1.5:
-        x, y = x * width, y * height
-    elif x > width * 1.2 or y > height * 1.2:
-        # Heuristic: some points are on 0-1000 grid.
-        if 0 <= x <= 1000 and 0 <= y <= 1000:
-            x, y = x / 1000.0 * width, y / 1000.0 * height
-    x = max(0.0, min(float(width - 1), float(x)))
-    y = max(0.0, min(float(height - 1), float(y)))
+        # [0,1] normalized -> [0,1000]
+        x, y = x * 1000.0, y * 1000.0
+    elif x > 1000 or y > 1000:
+        # Pixel coordinates -> [0,1000].
+        if width > 0 and height > 0:
+            x, y = x / float(width) * 1000.0, y / float(height) * 1000.0
+    # Otherwise treat as already in [0,1000].
+    x = max(0.0, min(1000.0, float(x)))
+    y = max(0.0, min(1000.0, float(y)))
     return x, y
 
 
-def parse_point_to_pixel(value: Any, width: int, height: int) -> Optional[Tuple[float, float]]:
+def parse_point_to_1000(value: Any, width: int, height: int) -> Optional[Tuple[float, float]]:
     point = parse_point_value(value)
     if point is None:
         return None
-    return to_pixel_point(point, width, height)
-
-
-def to_normalized_xy(x: float, y: float, width: int, height: int) -> list[float]:
-    x = max(0.0, min(1.0, x / width))
-    y = max(0.0, min(1.0, y / height))
-    return [x, y]
-
-
-def to_normalized_bbox(box: list[float], width: int, height: int) -> list[float]:
-    if len(box) == 2:
-        return to_normalized_xy(box[0], box[1], width, height)
-    x1, y1, x2, y2 = box
-    x1 = max(0.0, min(1.0, x1 / width))
-    y1 = max(0.0, min(1.0, y1 / height))
-    x2 = max(0.0, min(1.0, x2 / width))
-    y2 = max(0.0, min(1.0, y2 / height))
-    return [x1, y1, x2, y2]
+    return to_1000_point(point, width, height)
 
 
 def infer_swipe_direction(start_point: Optional[Tuple[float, float]], end_point: Optional[Tuple[float, float]]) -> str:
@@ -142,20 +130,53 @@ def point_to_string(point: Optional[Tuple[float, float]]) -> str:
     return f"{int(round(point[0]))},{int(round(point[1]))}"
 
 
-def parse_box_to_norm(box: Any, width: int, height: int) -> Optional[list[float]]:
+def _bbox_center(box: list[float]) -> Tuple[float, float]:
+    if len(box) == 2:
+        return box[0], box[1]
+    return (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
+
+
+def _to_1000_from_pixel(x: float, y: float, width: int, height: int) -> Tuple[float, float]:
+    if width <= 0 or height <= 0:
+        return max(0.0, min(1000.0, x)), max(0.0, min(1000.0, y))
+    return max(0.0, min(1000.0, x / width * 1000.0)), max(0.0, min(1000.0, y / height * 1000.0))
+
+
+def parse_box_to_1000(
+    box: Any,
+    width: int,
+    height: int,
+    ref_point_1000: Optional[Tuple[float, float]] = None,
+) -> Optional[list[float]]:
     if not (isinstance(box, dict) and isinstance(box.get("point"), list)):
         return None
     p = box["point"]
     try:
         if len(p) == 2:
-            p1 = to_pixel_point((float(p[0]), float(p[1])), width, height)
-            return to_normalized_xy(p1[0], p1[1], width, height)
+            x, y = float(p[0]), float(p[1])
+            cand_a = [max(0.0, min(1000.0, x)), max(0.0, min(1000.0, y))]
+            px, py = _to_1000_from_pixel(x, y, width, height)
+            cand_b = [px, py]
+            if ref_point_1000 is None:
+                return cand_b
+            da = (cand_a[0] - ref_point_1000[0]) ** 2 + (cand_a[1] - ref_point_1000[1]) ** 2
+            db = (cand_b[0] - ref_point_1000[0]) ** 2 + (cand_b[1] - ref_point_1000[1]) ** 2
+            return cand_a if da <= db else cand_b
         if len(p) == 4:
-            p1 = to_pixel_point((float(p[0]), float(p[1])), width, height)
-            p2 = to_pixel_point((float(p[2]), float(p[3])), width, height)
-            x1, y1 = min(p1[0], p2[0]), min(p1[1], p2[1])
-            x2, y2 = max(p1[0], p2[0]), max(p1[1], p2[1])
-            return to_normalized_bbox([x1, y1, x2, y2], width, height)
+            x1, y1, x2, y2 = float(p[0]), float(p[1]), float(p[2]), float(p[3])
+            cand_a = [max(0.0, min(1000.0, x1)), max(0.0, min(1000.0, y1)), max(0.0, min(1000.0, x2)), max(0.0, min(1000.0, y2))]
+            cand_bxy1 = _to_1000_from_pixel(x1, y1, width, height)
+            cand_bxy2 = _to_1000_from_pixel(x2, y2, width, height)
+            cand_b = [cand_bxy1[0], cand_bxy1[1], cand_bxy2[0], cand_bxy2[1]]
+            cand_a = [min(cand_a[0], cand_a[2]), min(cand_a[1], cand_a[3]), max(cand_a[0], cand_a[2]), max(cand_a[1], cand_a[3])]
+            cand_b = [min(cand_b[0], cand_b[2]), min(cand_b[1], cand_b[3]), max(cand_b[0], cand_b[2]), max(cand_b[1], cand_b[3])]
+            if ref_point_1000 is None:
+                return cand_b
+            ca = _bbox_center(cand_a)
+            cb = _bbox_center(cand_b)
+            da = (ca[0] - ref_point_1000[0]) ** 2 + (ca[1] - ref_point_1000[1]) ** 2
+            db = (cb[0] - ref_point_1000[0]) ** 2 + (cb[1] - ref_point_1000[1]) ** 2
+            return cand_a if da <= db else cand_b
     except Exception:
         return None
     return None
@@ -177,49 +198,49 @@ def map_action(
     default_text = "no input text"
 
     if action in ("click", "long_press"):
-        point_px = parse_point_to_pixel(params.get("point"), width, height)
-        bbox_norm = parse_box_to_norm(box, width, height)
-        if point_px is None and bbox_norm is not None and len(bbox_norm) == 4:
-            x = (bbox_norm[0] + bbox_norm[2]) / 2.0 * width
-            y = (bbox_norm[1] + bbox_norm[3]) / 2.0 * height
-            point_px = (x, y)
-        if point_px is None and bbox_norm is not None and len(bbox_norm) == 2:
-            point_px = (bbox_norm[0] * width, bbox_norm[1] * height)
-        if bbox_norm is None and point_px is not None:
-            bbox_norm = to_normalized_xy(point_px[0], point_px[1], width, height)
+        point_1000 = parse_point_to_1000(params.get("point"), width, height)
+        bbox_1000 = parse_box_to_1000(box, width, height, ref_point_1000=point_1000)
+        if point_1000 is None and bbox_1000 is not None and len(bbox_1000) == 4:
+            x = (bbox_1000[0] + bbox_1000[2]) / 2.0
+            y = (bbox_1000[1] + bbox_1000[3]) / 2.0
+            point_1000 = (x, y)
+        if point_1000 is None and bbox_1000 is not None and len(bbox_1000) == 2:
+            point_1000 = (bbox_1000[0], bbox_1000[1])
+        if bbox_1000 is None and point_1000 is not None:
+            bbox_1000 = [point_1000[0], point_1000[1]]
 
-        point_str = point_to_string(point_px)
+        point_str = point_to_string(point_1000)
         gt_params = {"point": point_str}
-        action_call = action_raw or f"{action}(point={_quote_for_action(point_str)})"
-        return action, bbox_norm or default_bbox, default_text, gt_params, action_call
+        action_call = f"{action}(point={_quote_for_action(point_str)})"
+        return action, bbox_1000 or default_bbox, default_text, gt_params, action_call
 
     if action == "type":
         content = str(params.get("content") or "")
         gt_params = {"content": content}
-        action_call = action_raw or f"type(content={_quote_for_action(content)})"
+        action_call = f"type(content={_quote_for_action(content)})"
         return "type", default_bbox, content, gt_params, action_call
 
     if action == "open_app":
         app_name = str(params.get("app_name") or "")
         gt_params = {"app_name": app_name}
-        action_call = action_raw or f"open_app(app_name={_quote_for_action(app_name)})"
+        action_call = f"open_app(app_name={_quote_for_action(app_name)})"
         return "open_app", default_bbox, app_name, gt_params, action_call
 
     if action == "swipe":
-        start_px = parse_point_to_pixel(params.get("start_point"), width, height)
-        end_px = parse_point_to_pixel(params.get("end_point"), width, height)
+        start_px = parse_point_to_1000(params.get("start_point"), width, height)
+        end_px = parse_point_to_1000(params.get("end_point"), width, height)
         velocity = _normalize_velocity(params.get("velocity"), default="600")
 
         if start_px is None:
-            start_px = (width * 0.5, height * 0.8)
+            start_px = (500.0, 800.0)
         if end_px is None:
-            end_px = (width * 0.5, height * 0.2)
+            end_px = (500.0, 200.0)
 
         start_str = point_to_string(start_px)
         end_str = point_to_string(end_px)
         direction = infer_swipe_direction(start_px, end_px)
         gt_params = {"start_point": start_str, "end_point": end_str, "velocity": velocity}
-        action_call = action_raw or (
+        action_call = (
             "swipe("
             f"start_point={_quote_for_action(start_str)}, "
             f"end_point={_quote_for_action(end_str)}, "
@@ -228,16 +249,16 @@ def map_action(
         return "swipe", default_bbox, direction, gt_params, action_call
 
     if action == "drag":
-        start_px = parse_point_to_pixel(params.get("start_point"), width, height)
-        end_px = parse_point_to_pixel(params.get("end_point"), width, height)
+        start_px = parse_point_to_1000(params.get("start_point"), width, height)
+        end_px = parse_point_to_1000(params.get("end_point"), width, height)
         if start_px is None:
-            start_px = (width * 0.5, height * 0.8)
+            start_px = (500.0, 800.0)
         if end_px is None:
-            end_px = (width * 0.5, height * 0.2)
+            end_px = (500.0, 200.0)
         start_str = point_to_string(start_px)
         end_str = point_to_string(end_px)
         gt_params = {"start_point": start_str, "end_point": end_str}
-        action_call = action_raw or (
+        action_call = (
             f"drag(start_point={_quote_for_action(start_str)}, end_point={_quote_for_action(end_str)})"
         )
         return "drag", default_bbox, default_text, gt_params, action_call
@@ -251,19 +272,19 @@ def map_action(
     if action == "wait":
         wait_t = str(params.get("t") if params.get("t") is not None else "1")
         gt_params = {"t": wait_t}
-        action_call = action_raw or f"wait(t={_quote_for_action(wait_t)})"
+        action_call = f"wait(t={_quote_for_action(wait_t)})"
         return "wait", default_bbox, wait_t, gt_params, action_call
 
     if action in ("finished", "call_user", "back_information"):
         content = str(params.get("content") or params.get("message") or "")
         gt_params = {"content": content}
-        action_call = action_raw or f"{action}(content={_quote_for_action(content)})"
+        action_call = f"{action}(content={_quote_for_action(content)})"
         return action, default_bbox, content, gt_params, action_call
 
     # Unknown actions fallback.
     content = str(params.get("content") or "")
     gt_params = {"content": content}
-    action_call = action_raw or f"finished(content={_quote_for_action(content)})"
+    action_call = f"finished(content={_quote_for_action(content)})"
     return "finished", default_bbox, content or default_text, gt_params, action_call
 
 
