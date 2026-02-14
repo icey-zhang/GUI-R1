@@ -18,7 +18,7 @@ python3 -m verl.trainer.main \
     worker.actor.ulysses_sequence_parallel_size=1 \
     worker.rollout.n=1 \
     worker.rollout.tensor_parallel_size=1 \
-    worker.rollout.max_model_len=4096 \
+    worker.rollout.max_model_len=8192 \
     worker.rollout.enable_chunked_prefill=false \
     worker.reward.compute_score=r1gui \
     trainer.experiment_name=qwen3_vl_4b_guir1_grpo \
