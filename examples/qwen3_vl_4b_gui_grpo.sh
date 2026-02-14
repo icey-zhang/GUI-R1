@@ -14,6 +14,7 @@ python3 -m verl.trainer.main \
     data.system_prompt="${SYSTEM_PROMPT}" \
     worker.actor.model.model_path=${MODEL_PATH} \
     worker.actor.global_batch_size=64 \
+    worker.actor.micro_batch_size_per_device_for_experience=8 \
     worker.actor.padding_free=false \
     worker.actor.ulysses_sequence_parallel_size=1 \
     worker.rollout.n=1 \

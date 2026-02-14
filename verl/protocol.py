@@ -495,7 +495,9 @@ class DataProto:
         return output
 
     def split(self, split_size: int) -> List["DataProto"]:
-        chunks = len(self) // split_size
+        if split_size <= 0:
+            raise ValueError(f"split_size must be positive, got {split_size}.")
+        chunks = max(1, len(self) // split_size)
         return self.chunk(chunks)
 
     @staticmethod
