@@ -1,13 +1,13 @@
 set -x
 
-MODEL_PATH=Qwen/Qwen3-VL-8B-Instruct  # replace with your local path if needed
+MODEL_PATH=/root/workspace/models/Qwen3-VL-8B-Instruct/
 
 SYSTEM_PROMPT=""""""
 
 python3 -m verl.trainer.main \
     config=examples/config.yaml \
-    data.train_files=datasets/GUI-R1/train.parquet \
-    data.val_files=datasets/GUI-R1/test.parquet \
+    data.train_files=/root/workspace/datasets/GUI-R1/train.parquet \
+    data.val_files=/root/workspace/datasets/GUI-R1/test.parquet \
     data.rollout_batch_size=64 \
     data.train_num_workers=2 \
     data.val_num_workers=0 \
