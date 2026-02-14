@@ -2,8 +2,8 @@ set -x
 
 # 1) Convert hm_data to train/test jsonl
 python scripts/convert_hm_data.py \
-  --input_dir /Users/zhangjiaqing/Documents/agent/Open-AutoGLM/hm_data \
-  --output_dir /Users/zhangjiaqing/Documents/agent/datasets/hm_data_converted \
+  --input_dir /root/workspace/datasets/hm_data/hm_data/ \
+  --output_dir /root/workspace/datasets/hm_data_converted \
   --test_ratio 0.05 \
   --seed 42
 
@@ -13,8 +13,8 @@ SYSTEM_PROMPT=""""""
 
 python3 -m verl.trainer.main \
     config=examples/config.yaml \
-    data.train_files=/Users/zhangjiaqing/Documents/agent/datasets/hm_data_converted/train.jsonl \
-    data.val_files=/Users/zhangjiaqing/Documents/agent/datasets/hm_data_converted/test.jsonl \
+    data.train_files=/root/workspace/datasets/hm_data_converted/train.jsonl \
+    data.val_files=/root/workspace/datasets/hm_data_converted/test.jsonl \
     data.rollout_batch_size=64 \
     data.train_num_workers=2 \
     data.val_num_workers=0 \
