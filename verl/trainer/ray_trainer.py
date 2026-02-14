@@ -278,8 +278,8 @@ class RayPPOTrainer:
         else:
             sampler = SequentialSampler(data_source=self.train_dataset)
 
-        train_num_workers = max(0, int(self.config.data.get("train_num_workers", 8)))
-        val_num_workers = max(0, int(self.config.data.get("val_num_workers", 8)))
+        train_num_workers = max(0, int(getattr(self.config.data, "train_num_workers", 8)))
+        val_num_workers = max(0, int(getattr(self.config.data, "val_num_workers", 8)))
 
         self.train_dataloader = StatefulDataLoader(
             dataset=self.train_dataset,

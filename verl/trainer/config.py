@@ -42,6 +42,8 @@ class DataConfig:
     max_response_length: int = 512
     rollout_batch_size: int = 512
     val_batch_size: int = -1
+    train_num_workers: int = 8
+    val_num_workers: int = 8
     system_prompt: Optional[str] = None
     shuffle: bool = True
     seed: int = 1
