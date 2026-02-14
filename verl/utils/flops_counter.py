@@ -79,17 +79,45 @@ class FlopsCounter:
             "qwen3_vl_moe": self._estimate_llama_flops,
         }
         self.config = config
+        self._warned_missing_config = False
+
+    def _get_model_attr(self, attr: str, default=None):
+        if hasattr(self.config, attr):
+            return getattr(self.config, attr)
+        text_config = getattr(self.config, "text_config", None)
+        if text_config is not None and hasattr(text_config, attr):
+            return getattr(text_config, attr)
+        return default
 
     def _estimate_unknown_flops(self, tokens_sum: int, batch_seqlens: List[int], delta_time: float) -> float:
         return 0
 
     def _estimate_llama_flops(self, tokens_sum: int, batch_seqlens: List[int], delta_time: float) -> float:
-        hidden_size = self.config.hidden_size
-        vocab_size = self.config.vocab_size
-        num_hidden_layers = self.config.num_hidden_layers
-        num_key_value_heads = self.config.num_key_value_heads
-        num_attention_heads = self.config.num_attention_heads
-        intermediate_size = self.config.intermediate_size
+        hidden_size = self._get_model_attr("hidden_size")
+        vocab_size = self._get_model_attr("vocab_size")
+        num_hidden_layers = self._get_model_attr("num_hidden_layers")
+        num_attention_heads = self._get_model_attr("num_attention_heads")
+        num_key_value_heads = self._get_model_attr("num_key_value_heads", default=num_attention_heads)
+        intermediate_size = self._get_model_attr("intermediate_size")
+
+        if any(
+            x is None or not isinstance(x, int) or x <= 0
+            for x in (
+                hidden_size,
+                vocab_size,
+                num_hidden_layers,
+                num_attention_heads,
+                num_key_value_heads,
+                intermediate_size,
+            )
+        ):
+            if not self._warned_missing_config:
+                print(
+                    f"Cannot infer FLOPS config for model_type={self.config.model_type}. "
+                    "MFU will be reported as zero."
+                )
+                self._warned_missing_config = True
+            return 0
 
         head_dim = hidden_size // num_attention_heads
         q_size = num_attention_heads * head_dim
