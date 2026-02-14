@@ -11,10 +11,10 @@ peft
 pillow
 pyarrow>=15.0.0
 pylatexenc
-qwen-vl-utils
+qwen-vl-utils>=0.0.11
 ray[default]
 tensordict
 torchdata
-transformers>=4.57.0
-vllm>=0.8.5
+transformers>=4.58.0
+vllm>=0.10.2
 wandb
