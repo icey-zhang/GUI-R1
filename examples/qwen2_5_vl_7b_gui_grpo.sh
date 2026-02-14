@@ -10,6 +10,9 @@ python3 -m verl.trainer.main \
     data.val_files=datasets/GUI-R1/test.parquet \
     data.system_prompt="${SYSTEM_PROMPT}" \
     worker.actor.model.model_path=${MODEL_PATH} \
+    worker.actor.global_batch_size=128 \
+    worker.actor.padding_free=false \
+    worker.actor.ulysses_sequence_parallel_size=1 \
     worker.rollout.enable_chunked_prefill=false \
     worker.reward.compute_score=r1gui \
     trainer.experiment_name=qwen2_5_vl_7b_guir1_grpo \

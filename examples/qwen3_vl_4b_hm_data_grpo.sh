@@ -20,6 +20,9 @@ python3 -m verl.trainer.main \
     data.val_num_workers=0 \
     data.system_prompt="${SYSTEM_PROMPT}" \
     worker.actor.model.model_path=${MODEL_PATH} \
+    worker.actor.global_batch_size=64 \
+    worker.actor.padding_free=false \
+    worker.actor.ulysses_sequence_parallel_size=1 \
     worker.rollout.n=1 \
     worker.rollout.tensor_parallel_size=1 \
     worker.rollout.enable_chunked_prefill=false \
