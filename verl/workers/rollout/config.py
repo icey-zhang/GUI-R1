@@ -34,6 +34,7 @@ class RolloutConfig:
     free_cache_engine: bool = False
     enable_chunked_prefill: bool = False
     tensor_parallel_size: int = 2
+    max_model_len: int = -1
     max_num_batched_tokens: int = 8192
     max_num_seqs: int = 1024
     disable_log_stats: bool = True

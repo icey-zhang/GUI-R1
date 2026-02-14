@@ -62,8 +62,13 @@ class vLLMRollout(BaseRollout):
         if not config.enforce_eager and config.free_cache_engine:
             raise ValueError("CUDA graph should be disabled when `free_cache_engine` is True.")
 
-        if config.max_num_batched_tokens < config.prompt_length + config.response_length:
-            raise ValueError("max_num_batched_tokens should be greater than prompt_length + response_length.")
+        effective_max_model_len = (
+            config.max_model_len
+            if getattr(config, "max_model_len", -1) and config.max_model_len > 0
+            else config.prompt_length + config.response_length
+        )
+        if config.max_num_batched_tokens < effective_max_model_len:
+            raise ValueError("max_num_batched_tokens should be greater than or equal to max_model_len.")
 
         vllm_init_kwargs = {}
         if config.limit_images > 0:
@@ -76,7 +81,7 @@ class vLLMRollout(BaseRollout):
             dtype=PrecisionType.to_str(PrecisionType.to_dtype(config.dtype)),
             gpu_memory_utilization=config.gpu_memory_utilization,
             enforce_eager=config.enforce_eager,
-            max_model_len=config.prompt_length + config.response_length,
+            max_model_len=effective_max_model_len,
             max_num_batched_tokens=config.max_num_batched_tokens,
             enable_sleep_mode=True,
             distributed_executor_backend="external_launcher",
