@@ -8,6 +8,8 @@ data:
   max_response_length: 2048
   rollout_batch_size: 512
   val_batch_size: -1
+  train_num_workers: 8
+  val_num_workers: 8
   shuffle: true
   seed: 1
   max_pixels: 4194304

@@ -16,6 +16,8 @@ python3 -m verl.trainer.main \
     data.train_files=/Users/zhangjiaqing/Documents/agent/datasets/hm_data_converted/train.jsonl \
     data.val_files=/Users/zhangjiaqing/Documents/agent/datasets/hm_data_converted/test.jsonl \
     data.rollout_batch_size=64 \
+    data.train_num_workers=2 \
+    data.val_num_workers=0 \
     data.system_prompt="${SYSTEM_PROMPT}" \
     worker.actor.model.model_path=${MODEL_PATH} \
     worker.rollout.n=1 \

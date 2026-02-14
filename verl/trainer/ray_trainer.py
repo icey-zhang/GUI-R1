@@ -278,11 +278,14 @@ class RayPPOTrainer:
         else:
             sampler = SequentialSampler(data_source=self.train_dataset)
 
+        train_num_workers = max(0, int(self.config.data.get("train_num_workers", 8)))
+        val_num_workers = max(0, int(self.config.data.get("val_num_workers", 8)))
+
         self.train_dataloader = StatefulDataLoader(
             dataset=self.train_dataset,
             batch_size=self.config.data.rollout_batch_size,
             sampler=sampler,
-            num_workers=8,
+            num_workers=train_num_workers,
             collate_fn=collate_fn,
             pin_memory=False,
             drop_last=True,
@@ -307,7 +310,7 @@ class RayPPOTrainer:
             if self.config.data.val_batch_size == -1
             else self.config.data.val_batch_size,
             shuffle=False,
-            num_workers=8,
+            num_workers=val_num_workers,
             collate_fn=collate_fn,
             pin_memory=False,
             drop_last=False,
