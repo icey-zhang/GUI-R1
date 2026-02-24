@@ -609,7 +609,7 @@ class RayPPOTrainer:
                     with _timer("gen", timing_raw):  # wg: worker group
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
                     self._maybe_print_train_generations(
-                        prompt_ids=batch.batch["input_ids"], response_ids=gen_batch_output.batch["responses"]
+                        prompt_ids=gen_batch.batch["input_ids"], response_ids=gen_batch_output.batch["responses"]
                     )
 
                     if self.config.algorithm.adv_estimator == "remax":
