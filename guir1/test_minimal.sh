@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_DIR}"
 
-MODEL_PATH="${MODEL_PATH:-}"
+MODEL_PATH="${MODEL_PATH:-/root/workspace/code/GUI-R1/GUI-R1/checkpoints/easy_r1/qwen3_vl_4b_hm_data_grpo}"
 DATA_PATH="${DATA_PATH:-/root/workspace/datasets/GUI-R1/androidcontrol_high_test.parquet}"
 OUTPUT_PATH="${OUTPUT_PATH:-./guir1/outputs}"
 NUM_ACTOR="${NUM_ACTOR:-1}"
