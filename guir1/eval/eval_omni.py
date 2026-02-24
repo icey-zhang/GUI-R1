@@ -10,6 +10,18 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+def _get_pred_xy(pred, gt, pred_coord_scale: int):
+    pred_coord = pred.get("pred_coord", [-100, -100])
+    if not isinstance(pred_coord, (list, tuple)) or len(pred_coord) < 2:
+        return -100.0, -100.0
+    pred_x = float(pred_coord[0])
+    pred_y = float(pred_coord[1])
+    if pred_coord_scale == 1000:
+        width, height = gt["image_size"][0], gt["image_size"][1]
+        pred_x = pred_x * float(width) / 1000.0
+        pred_y = pred_y * float(height) / 1000.0
+    return pred_x, pred_y
+
 def calculate_f1_score(predicted_str, ground_truth_str):
     predicted_str=predicted_str.replace("[","").replace("]","")
     ground_truth_str=ground_truth_str.replace("[","").replace("]","")
@@ -65,7 +77,7 @@ def evaluate(args):
         if gt['gt_action'] in ['click','long_press','moveto','doubleclick','rightclick']:
             category=gt['group']+'-'+gt['gt_action']+'-'+'grounding'
             gt_bbox=gt['gt_bbox']
-            pred_x,pred_y=pred['pred_coord'][:2]
+            pred_x, pred_y = _get_pred_xy(pred, gt, args.pred_coord_scale)
             score_dict[category+"_"+"full"] += 1
             if ((gt_bbox[0]-pred_x)/gt['image_size'][0])**2+((gt_bbox[1]-pred_y)/gt['image_size'][1])**2<0.14**2:
                 score_dict[category] += 1
@@ -106,6 +118,7 @@ if __name__ == '__main__':
     parser.add_argument('--datasets', type=str, default='')
     parser.add_argument('--output_path', type=str, default='./outputs/score/')
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--pred_coord_scale', type=int, default=1, choices=[1, 1000])
     args = parser.parse_args()
 
     if not os.path.exists(args.output_path):

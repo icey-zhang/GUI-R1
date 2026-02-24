@@ -21,6 +21,7 @@ MAX_PIXELS="${MAX_PIXELS:-458752}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.72}"
 MAX_TOKENS="${MAX_TOKENS:-512}"
+PRED_COORD_SCALE="${PRED_COORD_SCALE:-1000}"
 export CUDA_VISIBLE_DEVICES
 
 if [[ -z "${MODEL_PATH}" ]]; then
@@ -78,6 +79,7 @@ python guir1/inference/inference_vllm_android.py \
 
 python guir1/eval/eval_omni.py \
   --model_id "${MODEL_ID}" \
-  --prediction_file_path "${PRED_FILE}"
+  --prediction_file_path "${PRED_FILE}" \
+  --pred_coord_scale "${PRED_COORD_SCALE}"
 
 echo "Done. Prediction file: ${PRED_FILE}"
