@@ -1,5 +1,7 @@
 import os
 import json
+import sys
+from pathlib import Path
 from tqdm import tqdm
 from transformers import AutoProcessor
 from vllm import LLM, SamplingParams
@@ -12,7 +14,14 @@ from datasets import load_dataset
 from datasets import Dataset as hf_dataset
 from PIL import Image
 from io import BytesIO
-from verl.utils.reward_score.r1gui import extract_action, extract_coord, extract_input_text
+try:
+    from verl.utils.reward_score.r1gui import extract_action, extract_coord, extract_input_text
+except ModuleNotFoundError:
+    # Support running script directly without installing project as a package.
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from verl.utils.reward_score.r1gui import extract_action, extract_coord, extract_input_text
 # 初始化 Ray
 ray.init()
 
