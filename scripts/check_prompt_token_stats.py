@@ -4,13 +4,22 @@
 import argparse
 import math
 import random
+import sys
+from pathlib import Path
 from typing import Dict, List
 
 import numpy as np
 from tqdm import tqdm
 
-from verl.utils.dataset import RLHFDataset
-from verl.utils.tokenizer import get_processor, get_tokenizer
+try:
+    from verl.utils.dataset import RLHFDataset
+    from verl.utils.tokenizer import get_processor, get_tokenizer
+except ModuleNotFoundError:
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from verl.utils.dataset import RLHFDataset
+    from verl.utils.tokenizer import get_processor, get_tokenizer
 
 
 def _summary(arr: List[int]) -> Dict[str, int]:
