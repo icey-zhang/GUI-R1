@@ -40,8 +40,8 @@ def build_prompt(instruction: str, history: str) -> str:
         f"executing the command '{instruction}', with the action history being '{history}'.\n"
         "Please output exactly ONE action call using hm_data format.\n"
         "All coordinates must be in 0-1000 relative coordinate system.\n"
-        "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:\n"
-        "<think> ... </think> <answer>action(params...)</answer>\n"
+        "Output the thinking process in <thinking> </thinking> tags, and the final answer in <answer> </answer> tags as follows:\n"
+        "<thinking> ... </thinking> <answer>action(params...)</answer>\n"
         "Available actions and signatures:\n"
         "click(point='x1,y1')\n"
         "long_press(point='x1,y1')\n"
@@ -54,11 +54,7 @@ def build_prompt(instruction: str, history: str) -> str:
         "wait(t='t')\n"
         "finished(content='')\n"
         "call_user(content='')\n"
-        "back_information(content='')\n"
-        "Examples:\n"
-        "<answer>click(point='123,300')</answer>\n"
-        "<answer>type(content='蒜蓉小龙虾\\n')</answer>\n"
-        "<answer>finished(content='任务已完成')</answer>"
+        "back_information(content='')"
     )
 
 
@@ -73,13 +69,13 @@ def _normalize_prediction_for_parser(text: str) -> str:
     if not s:
         return s
     if "<answer>" in s and "</answer>" in s:
-        if "<think>" not in s:
-            return f"<think></think>{s}"
+        if ("<think>" not in s and "<thinking>" not in s):
+            return f"<thinking></thinking>{s}"
         return s
     m = ACTION_CALL_RE.search(s)
     if m:
         action_call = m.group(0).strip()
-        return f"<think></think><answer>{action_call}</answer>"
+        return f"<thinking></thinking><answer>{action_call}</answer>"
     return s
 
 

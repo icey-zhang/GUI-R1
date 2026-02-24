@@ -1,3 +1,4 @@
+import math
 import os
 import json
 import sys
@@ -65,8 +66,8 @@ class MultiModalDataset(Dataset):
             f"executing the command '{text}', with the action history being '{history}'.\n"
             "Please output exactly ONE action call using hm_data format.\n"
             "All coordinates must be in 0-1000 relative coordinate system.\n"
-            "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:\n"
-            "<think> ... </think> <answer>action(params...)</answer>\n"
+            "Output the thinking process in <thinking> </thinking> tags, and the final answer in <answer> </answer> tags as follows:\n"
+            "<thinking> ... </thinking> <answer>action(params...)</answer>\n"
             "Available actions and signatures:\n"
             "click(point='x1,y1')\n"
             "long_press(point='x1,y1')\n"
@@ -79,11 +80,7 @@ class MultiModalDataset(Dataset):
             "wait(t='t')\n"
             "finished(content='')\n"
             "call_user(content='')\n"
-            "back_information(content='')\n"
-            "Examples:\n"
-            "<answer>click(point='123,300')</answer>\n"
-            "<answer>type(content='蒜蓉小龙虾\\n')</answer>\n"
-            "<answer>finished(content='任务已完成')</answer>"
+            "back_information(content='')"
         )
         text = '<image>\n' + text
         message = [
@@ -142,7 +139,14 @@ def custom_collate_fn(batch):
 
 @ray.remote(num_gpus=1)
 class Worker:
-    def __init__(self, model_path, sampling_params, max_model_len: int, gpu_memory_utilization: float):
+    def __init__(
+        self,
+        model_path,
+        sampling_params,
+        max_model_len: int,
+        gpu_memory_utilization: float,
+        debug_print_n: int = 0,
+    ):
         self.llm = LLM(
             model=model_path,
             limit_mm_per_prompt={"image": 1, "video": 1},
@@ -150,9 +154,11 @@ class Worker:
             gpu_memory_utilization=gpu_memory_utilization,
         )
         self.sampling_params = sampling_params
+        self.debug_print_n = max(0, int(debug_print_n))
 
     def process_data(self, dataloader):
         results = []
+        printed = 0
 
         for batch in tqdm(dataloader):
             prompts = batch["prompts"]
@@ -185,6 +191,19 @@ class Worker:
                 pred_action = extract_action(generated_text)
                 original_sample["pred_action"] = pred_action
                 original_sample["pred_input_text"]=extract_input_text(generated_text)
+
+                if printed < self.debug_print_n:
+                    print(
+                        f"[DEBUG][pid={os.getpid()}] instruction={str(original_sample.get('instruction', ''))[:200]}",
+                        flush=True,
+                    )
+                    print(f"[DEBUG][pid={os.getpid()}] pred={generated_text}", flush=True)
+                    print(
+                        f"[DEBUG][pid={os.getpid()}] parsed action={pred_action}, coord={original_sample['pred_coord']}, input={original_sample['pred_input_text']}",
+                        flush=True,
+                    )
+                    printed += 1
+
                 original_sample["image"]=''
                 results.append(original_sample)
 
@@ -228,6 +247,7 @@ def main(args):
             sampling_params,
             args.max_model_len,
             args.gpu_memory_utilization,
+            math.ceil(args.debug_print_n / max(1, num_actors)),
         )
         for _ in range(num_actors)
     ]
@@ -267,5 +287,6 @@ if __name__ == "__main__":
     parser.add_argument('--max_model_len', type=int, default=4096)
     parser.add_argument('--gpu_memory_utilization', type=float, default=0.72)
     parser.add_argument('--max_tokens', type=int, default=512)
+    parser.add_argument('--debug_print_n', type=int, default=0)
     args = parser.parse_args()
     main(args)

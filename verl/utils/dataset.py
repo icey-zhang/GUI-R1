@@ -272,9 +272,9 @@ def _build_prompt(instruction: str, history: str, task_type: str) -> str:
             f"executing the command '{instruction}', with the action history being '{history}'.\n"
             f"Please output exactly ONE action call from {action_space} using hm_data format.\n"
             "All coordinates must be in 0-1000 relative coordinate system.\n"
-            "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as "
+            "Output the thinking process in <thinking> </thinking> tags, and the final answer in <answer> </answer> tags as "
             "follows:\n"
-            "<think> ... </think> <answer>action(params...)</answer>\n"
+            "<thinking> ... </thinking> <answer>action(params...)</answer>\n"
             "Available actions and signatures:\n"
             "click(point='x1,y1')\n"
             "long_press(point='x1,y1')\n"
@@ -287,11 +287,7 @@ def _build_prompt(instruction: str, history: str, task_type: str) -> str:
             "wait(t='t')\n"
             "finished(content='')\n"
             "call_user(content='')\n"
-            "back_information(content='')\n"
-            "Examples:\n"
-            "<answer>click(point='123,300')</answer>\n"
-            "<answer>type(content='蒜蓉小龙虾\\n')</answer>\n"
-            "<answer>finished(content='任务已完成')</answer>"
+            "back_information(content='')"
         )
 
     return (
@@ -299,11 +295,9 @@ def _build_prompt(instruction: str, history: str, task_type: str) -> str:
         f"executing the command '{instruction}', with the action history being '{history}'.\n"
         "Please output exactly one action call in hm_data format.\n"
         "Coordinates must be in 0-1000 relative coordinate system.\n"
-        "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as "
+        "Output the thinking process in <thinking> </thinking> tags, and the final answer in <answer> </answer> tags as "
         "follows:\n"
-        "<think> ... </think> <answer>click(point='x1,y1')</answer>\n"
-        "Example:\n"
-        "<answer>click(point='123,300')</answer>\n"
+        "<thinking> ... </thinking> <answer>click(point='x1,y1')</answer>\n"
     )
 
 
