@@ -217,6 +217,8 @@ class RayPPOTrainer:
         self.config = config
         self.reward_fn = reward_fn
         self.val_reward_fn = val_reward_fn
+        self.train_debug_print_n = max(0, int(os.getenv("GUIR1_TRAIN_DEBUG_PRINT_N", "0")))
+        self.train_debug_print_interval = max(1, int(os.getenv("GUIR1_TRAIN_DEBUG_PRINT_INTERVAL", "100")))
 
         self.hybrid_engine = config.worker.hybrid_engine
         if self.hybrid_engine:
@@ -255,6 +257,37 @@ class RayPPOTrainer:
             raise ValueError("Rollout batch size must be divisible by global batch size.")
 
         self._create_dataloader()
+
+    def _maybe_print_train_generations(self, prompt_ids: torch.Tensor, response_ids: torch.Tensor) -> None:
+        if self.train_debug_print_n <= 0:
+            return
+        if self.global_step % self.train_debug_print_interval != 0:
+            return
+        if prompt_ids.numel() == 0 or response_ids.numel() == 0:
+            return
+
+        try:
+            prompt_count = prompt_ids.size(0)
+            response_count = response_ids.size(0)
+            if prompt_count <= 0 or response_count <= 0:
+                return
+
+            samples_to_show = min(self.train_debug_print_n, response_count)
+            repeat_per_prompt = max(1, response_count // prompt_count)
+
+            print(
+                f"[TRAIN-DEBUG] step={self.global_step}, show={samples_to_show}, "
+                f"responses={response_count}, prompts={prompt_count}, repeat={repeat_per_prompt}",
+                flush=True,
+            )
+            for i in range(samples_to_show):
+                prompt_idx = min(prompt_count - 1, i // repeat_per_prompt)
+                p_text = self.tokenizer.decode(prompt_ids[prompt_idx], skip_special_tokens=True)
+                r_text = self.tokenizer.decode(response_ids[i], skip_special_tokens=True)
+                print(f"[TRAIN-DEBUG][{i}] prompt={p_text[:240]}", flush=True)
+                print(f"[TRAIN-DEBUG][{i}] response={r_text}", flush=True)
+        except Exception as e:
+            print(f"[TRAIN-DEBUG] print failed: {e}", flush=True)
 
     def _create_dataloader(self) -> None:
         self.train_dataset = RLHFDataset(
@@ -575,6 +608,9 @@ class RayPPOTrainer:
                     # generate a batch
                     with _timer("gen", timing_raw):  # wg: worker group
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                    self._maybe_print_train_generations(
+                        prompt_ids=batch.batch["input_ids"], response_ids=gen_batch_output.batch["responses"]
+                    )
 
                     if self.config.algorithm.adv_estimator == "remax":
                         with _timer("gen_max", timing_raw):

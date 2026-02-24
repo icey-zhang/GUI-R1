@@ -12,7 +12,12 @@ MODEL_PATH=/root/workspace/models/Qwen3-VL-4B-Instruct/
 SYSTEM_PROMPT=""""""
 N_GPUS=${N_GPUS:-4}
 CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-checkpoints/easy_r1/qwen3_vl_4b_hm_data_grpo}
+GUIR1_TRAIN_DEBUG_PRINT_N=${GUIR1_TRAIN_DEBUG_PRINT_N:-8}
+GUIR1_TRAIN_DEBUG_PRINT_INTERVAL=${GUIR1_TRAIN_DEBUG_PRINT_INTERVAL:-20}
 RESUME_ARGS=""
+
+export GUIR1_TRAIN_DEBUG_PRINT_N
+export GUIR1_TRAIN_DEBUG_PRINT_INTERVAL
 
 if [ -f "${CHECKPOINT_ROOT}/latest_global_step.txt" ]; then
   STEP=$(cat "${CHECKPOINT_ROOT}/latest_global_step.txt")
