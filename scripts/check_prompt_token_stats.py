@@ -56,6 +56,7 @@ def main() -> None:
     parser.add_argument("--suggest_percentile", type=float, default=99.0)
     parser.add_argument("--max_response_length", type=int, default=1024)
     parser.add_argument("--reserve_tokens", type=int, default=256)
+    parser.add_argument("--max_error_examples", type=int, default=5)
     args = parser.parse_args()
 
     tokenizer = get_tokenizer(args.model_path, trust_remote_code=True)
@@ -86,17 +87,35 @@ def main() -> None:
     full_prompt_lens: List[int] = []
     text_prompt_lens: List[int] = []
     skipped = 0
+    error_examples: List[str] = []
 
     for idx in tqdm(indices, desc="Collecting prompt stats"):
         try:
             item = dataset[idx]
             full_prompt_lens.append(int(item["attention_mask"].sum().item()))
             text_prompt_lens.append(int(len(item["raw_prompt_ids"])))
-        except Exception:
+        except Exception as e:
             skipped += 1
+            if len(error_examples) < args.max_error_examples:
+                image_value = None
+                try:
+                    raw_row = dataset.dataset[idx]
+                    image_value = raw_row.get("image", raw_row.get("images", None))
+                except Exception:
+                    pass
+                error_examples.append(
+                    f"idx={idx}, error={type(e).__name__}: {e}, image={image_value}"
+                )
 
     if not full_prompt_lens:
-        raise RuntimeError("No valid samples collected. Please check data/model paths.")
+        msg = [
+            "No valid samples collected.",
+            "Please check data/model/image paths and image accessibility.",
+        ]
+        if error_examples:
+            msg.append("Error examples:")
+            msg.extend(error_examples)
+        raise RuntimeError("\n".join(msg))
 
     print(f"data_path: {args.data_path}")
     print(f"model_path: {args.model_path}")
@@ -104,6 +123,10 @@ def main() -> None:
     print(f"sampled: {n}")
     print(f"valid: {len(full_prompt_lens)}")
     print(f"skipped: {skipped}")
+    if error_examples:
+        print("\n[error examples]")
+        for e in error_examples:
+            print(e)
     print(f"probe_max_prompt_length: {args.probe_max_prompt_length}")
     print()
 
