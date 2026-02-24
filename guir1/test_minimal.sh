@@ -46,11 +46,12 @@ if [[ "${AUTO_MERGE}" == "1" ]] && compgen -G "${MODEL_PATH}/model_world_size_*_
   MODEL_PATH="${HF_DIR}"
 fi
 
-MODEL_ID="$(basename "${MODEL_PATH}")"
-if [[ "${MODEL_ID}" == "huggingface" ]]; then
-  MODEL_ID="$(basename "$(dirname "${MODEL_PATH}")")"
-fi
-PRED_FILE="${OUTPUT_PATH}/${MODEL_ID}/androidcontrol_high_test.json"
+MODEL_OUTPUT_DIR="$(basename "${MODEL_PATH}")"
+MODEL_ID="${MODEL_ID:-${MODEL_OUTPUT_DIR}}"
+DATA_BASENAME="$(basename "${DATA_PATH}")"
+PRED_FILENAME="${DATA_BASENAME/.jsonl/_pred.jsonl}"
+PRED_FILENAME="${PRED_FILENAME/.parquet/.json}"
+PRED_FILE="${OUTPUT_PATH}/${MODEL_OUTPUT_DIR}/${PRED_FILENAME}"
 
 echo "Use MODEL_PATH=${MODEL_PATH}"
 echo "Use DATA_PATH=${DATA_PATH}"
