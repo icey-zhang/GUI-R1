@@ -258,15 +258,26 @@ class RayPPOTrainer:
 
         self._create_dataloader()
 
-    def _maybe_print_train_generations(self, prompt_ids: torch.Tensor, response_ids: torch.Tensor) -> None:
+    def _maybe_print_train_generations(self, batch: DataProto, reward_tensor: Optional[torch.Tensor] = None) -> None:
         if self.train_debug_print_n <= 0:
             return
         if self.global_step % self.train_debug_print_interval != 0:
             return
-        if prompt_ids.numel() == 0 or response_ids.numel() == 0:
+        if "responses" not in batch.batch.keys():
             return
 
         try:
+            response_ids = batch.batch["responses"]
+            if response_ids.numel() == 0:
+                return
+
+            if "input_ids" in batch.batch.keys():
+                prompt_ids = batch.batch["input_ids"]
+            elif "prompts" in batch.batch.keys():
+                prompt_ids = batch.batch["prompts"]
+            else:
+                return
+
             prompt_count = prompt_ids.size(0)
             response_count = response_ids.size(0)
             if prompt_count <= 0 or response_count <= 0:
@@ -274,6 +285,7 @@ class RayPPOTrainer:
 
             samples_to_show = min(self.train_debug_print_n, response_count)
             repeat_per_prompt = max(1, response_count // prompt_count)
+            ground_truth = batch.non_tensor_batch.get("ground_truth", None)
 
             print(
                 f"[TRAIN-DEBUG] step={self.global_step}, show={samples_to_show}, "
@@ -284,8 +296,18 @@ class RayPPOTrainer:
                 prompt_idx = min(prompt_count - 1, i // repeat_per_prompt)
                 p_text = self.tokenizer.decode(prompt_ids[prompt_idx], skip_special_tokens=True)
                 r_text = self.tokenizer.decode(response_ids[i], skip_special_tokens=True)
+                gt_text = ""
+                if ground_truth is not None and len(ground_truth) > i:
+                    gt_text = str(ground_truth[i])
+                reward_score = None
+                if reward_tensor is not None and reward_tensor.size(0) > i:
+                    reward_score = float(reward_tensor[i].sum().item())
                 print(f"[TRAIN-DEBUG][{i}] prompt={p_text}", flush=True)
                 print(f"[TRAIN-DEBUG][{i}] response={r_text}", flush=True)
+                if gt_text:
+                    print(f"[TRAIN-DEBUG][{i}] ground_truth={gt_text}", flush=True)
+                if reward_score is not None:
+                    print(f"[TRAIN-DEBUG][{i}] reward={reward_score:.6f}", flush=True)
         except Exception as e:
             print(f"[TRAIN-DEBUG] print failed: {e}", flush=True)
 
@@ -608,9 +630,6 @@ class RayPPOTrainer:
                     # generate a batch
                     with _timer("gen", timing_raw):  # wg: worker group
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
-                    self._maybe_print_train_generations(
-                        prompt_ids=gen_batch.batch["input_ids"], response_ids=gen_batch_output.batch["responses"]
-                    )
 
                     if self.config.algorithm.adv_estimator == "remax":
                         with _timer("gen_max", timing_raw):
@@ -645,6 +664,7 @@ class RayPPOTrainer:
                             f"reward/{key}": value for key, value in reduce_metrics(reward_metrics).items()
                         }
                         metrics.update(reward_metrics)
+                        self._maybe_print_train_generations(batch=batch, reward_tensor=reward_tensor)
 
                     # balance the number of valid tokens on each dp rank.
                     # Note that this breaks the order of data inside the batch.
