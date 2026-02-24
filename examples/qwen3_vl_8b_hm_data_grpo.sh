@@ -26,7 +26,7 @@ python3 -m verl.trainer.main \
     worker.actor.ulysses_sequence_parallel_size=1 \
     worker.rollout.n=1 \
     worker.rollout.tensor_parallel_size=1 \
-    worker.rollout.max_model_len=8192 \
+    worker.rollout.max_model_len=6144 \
     worker.rollout.enable_chunked_prefill=false \
     worker.reward.compute_score=r1gui \
     trainer.experiment_name=qwen3_vl_8b_hm_data_grpo \
@@ -34,6 +34,6 @@ python3 -m verl.trainer.main \
     trainer.val_before_train=false \
     trainer.val_freq=-1 \
     data.max_pixels=1258291 \
-    data.max_prompt_length=2048 \
+    data.max_prompt_length=4096 \
     data.max_response_length=1024 \
     data.val_batch_size=16
