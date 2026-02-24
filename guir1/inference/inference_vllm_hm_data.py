@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -59,6 +60,27 @@ def build_prompt(instruction: str, history: str) -> str:
         "<answer>type(content='蒜蓉小龙虾\\n')</answer>\n"
         "<answer>finished(content='任务已完成')</answer>"
     )
+
+
+ACTION_CALL_RE = re.compile(
+    r"(click|long_press|type|swipe|open_app|drag|press_home|press_back|wait|finished|call_user|back_information)\s*\([^)]*\)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _normalize_prediction_for_parser(text: str) -> str:
+    s = str(text or "").strip()
+    if not s:
+        return s
+    if "<answer>" in s and "</answer>" in s:
+        if "<think>" not in s:
+            return f"<think></think>{s}"
+        return s
+    m = ACTION_CALL_RE.search(s)
+    if m:
+        action_call = m.group(0).strip()
+        return f"<think></think><answer>{action_call}</answer>"
+    return s
 
 
 def _load_rows(data_path: str) -> List[Dict[str, Any]]:
@@ -178,16 +200,19 @@ def main(args):
         for meta, output in zip(prepared, outputs):
             sample = meta["sample"]
             generated_text = output.outputs[0].text if output.outputs else ""
-            sample["pred"] = generated_text
-            pred_coord, _ = extract_coord(generated_text)
+            normalized_pred = _normalize_prediction_for_parser(generated_text)
+            sample["pred_raw"] = generated_text
+            sample["pred"] = normalized_pred
+            pred_coord, _ = extract_coord(normalized_pred)
             sample["pred_coord"] = [pred_coord[0], pred_coord[1]]
-            sample["pred_action"] = extract_action(generated_text)
-            sample["pred_input_text"] = extract_input_text(generated_text)
+            sample["pred_action"] = extract_action(normalized_pred)
+            sample["pred_input_text"] = extract_input_text(normalized_pred)
             sample["image"] = ""
 
             if debug_left > 0:
                 print(f"[DEBUG] instruction={str(sample.get('instruction', ''))[:200]}", flush=True)
-                print(f"[DEBUG] pred={generated_text}", flush=True)
+                print(f"[DEBUG] pred_raw={generated_text}", flush=True)
+                print(f"[DEBUG] pred_norm={normalized_pred}", flush=True)
                 print(
                     f"[DEBUG] parsed action={sample['pred_action']}, coord={sample['pred_coord']}, input={sample['pred_input_text']}",
                     flush=True,
