@@ -11,6 +11,17 @@ python scripts/convert_hm_data.py \
 MODEL_PATH=/root/workspace/models/Qwen3-VL-4B-Instruct/
 SYSTEM_PROMPT=""""""
 N_GPUS=${N_GPUS:-4}
+CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-checkpoints/easy_r1/qwen3_vl_4b_hm_data_grpo}
+RESUME_ARGS=""
+
+if [ -f "${CHECKPOINT_ROOT}/latest_global_step.txt" ]; then
+  STEP=$(cat "${CHECKPOINT_ROOT}/latest_global_step.txt")
+  LOAD_CKPT="${CHECKPOINT_ROOT}/global_step_${STEP}"
+  if [ -d "${LOAD_CKPT}" ]; then
+    echo "Resume from checkpoint: ${LOAD_CKPT}"
+    RESUME_ARGS="trainer.load_checkpoint_path=${LOAD_CKPT}"
+  fi
+fi
 
 python3 -m verl.trainer.main \
     config=examples/config.yaml \
@@ -36,9 +47,13 @@ python3 -m verl.trainer.main \
     worker.rollout.enable_chunked_prefill=false \
     worker.reward.compute_score=r1gui \
     trainer.experiment_name=qwen3_vl_4b_hm_data_grpo \
+    trainer.save_checkpoint_path=${CHECKPOINT_ROOT} \
+    trainer.save_freq=10 \
+    trainer.save_limit=3 \
     trainer.n_gpus_per_node=${N_GPUS} \
     trainer.val_before_train=false \
     trainer.val_freq=-1 \
     data.max_pixels=1258291 \
     data.max_prompt_length=2048 \
-    data.max_response_length=1024
+    data.max_response_length=1024 \
+    ${RESUME_ARGS}
