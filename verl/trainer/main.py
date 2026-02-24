@@ -16,6 +16,7 @@ Note that we don't combine the main with ray_trainer as ray_trainer is used by o
 """
 
 import json
+import os
 
 import ray
 from omegaconf import OmegaConf
@@ -99,7 +100,21 @@ def main():
 
     if not ray.is_initialized():
         # this is for local ray cluster
-        ray.init(runtime_env={"env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN"}})
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        current_pythonpath = os.environ.get("PYTHONPATH", "")
+        if current_pythonpath:
+            pythonpath = f"{repo_root}:{current_pythonpath}"
+        else:
+            pythonpath = repo_root
+        ray.init(
+            runtime_env={
+                "env_vars": {
+                    "TOKENIZERS_PARALLELISM": "true",
+                    "NCCL_DEBUG": "WARN",
+                    "PYTHONPATH": pythonpath,
+                }
+            }
+        )
 
     runner = Runner.remote()
     ray.get(runner.run.remote(ppo_config))

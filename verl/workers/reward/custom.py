@@ -38,6 +38,10 @@ class CustomRewardManager:
             self.compute_score: Callable[[str, str], RewardScore] = r1v_compute_score
         elif compute_score == "r1gui":
             self.compute_score: Callable[[str, str], RewardScore] = r1gui_compute_score
+            from ...utils.reward_score import r1gui as r1gui_module
+
+            print(f"[R1GUI] reward module path: {r1gui_module.__file__}", flush=True)
+            print(f"[R1GUI] OUTER_PATTERN: {r1gui_module.OUTER_PATTERN.pattern}", flush=True)
         else:
             raise NotImplementedError()
 

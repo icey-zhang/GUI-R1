@@ -5,7 +5,10 @@ import re
 from typing import Any, Dict, Optional, Tuple
 
 
-OUTER_PATTERN = re.compile(r"<think>.*?</think>\s*<answer>.*?</answer>", re.DOTALL)
+OUTER_PATTERN = re.compile(
+    r"<(?P<think_tag>think|thinking)>.*?</(?P=think_tag)>\s*<answer>.*?</answer>",
+    re.DOTALL,
+)
 ANSWER_PATTERN = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
 POINT_TAG_RE = re.compile(r"<point>\s*([0-9]+(?:\.[0-9]+)?)\s+([0-9]+(?:\.[0-9]+)?)\s*</point>")
 POINT_CSV_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*$")
