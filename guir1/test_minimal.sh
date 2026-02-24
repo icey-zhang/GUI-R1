@@ -12,8 +12,16 @@ cd "${REPO_DIR}"
 MODEL_PATH="${MODEL_PATH:-/root/workspace/code/GUI-R1/GUI-R1/checkpoints/easy_r1/qwen3_vl_4b_hm_data_grpo}"
 DATA_PATH="${DATA_PATH:-/root/workspace/datasets/GUI-R1/androidcontrol_high_test.parquet}"
 OUTPUT_PATH="${OUTPUT_PATH:-./guir1/outputs}"
-NUM_ACTOR="${NUM_ACTOR:-1}"
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
+NUM_ACTOR="${NUM_ACTOR:-8}"
 AUTO_MERGE="${AUTO_MERGE:-1}"
+MICRO_BATCH="${MICRO_BATCH:-1}"
+NUM_WORKERS="${NUM_WORKERS:-2}"
+MAX_PIXELS="${MAX_PIXELS:-458752}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.72}"
+MAX_TOKENS="${MAX_TOKENS:-512}"
+export CUDA_VISIBLE_DEVICES
 
 if [[ -z "${MODEL_PATH}" ]]; then
   echo "ERROR: MODEL_PATH is empty."
@@ -60,7 +68,13 @@ python guir1/inference/inference_vllm_android.py \
   --model_path "${MODEL_PATH}" \
   --data_path "${DATA_PATH}" \
   --output_path "${OUTPUT_PATH}" \
-  --num_actor "${NUM_ACTOR}"
+  --num_actor "${NUM_ACTOR}" \
+  --micro_batch "${MICRO_BATCH}" \
+  --num_workers "${NUM_WORKERS}" \
+  --max_pixels "${MAX_PIXELS}" \
+  --max_model_len "${MAX_MODEL_LEN}" \
+  --gpu_memory_utilization "${GPU_MEMORY_UTILIZATION}" \
+  --max_tokens "${MAX_TOKENS}"
 
 python guir1/eval/eval_omni.py \
   --model_id "${MODEL_ID}" \

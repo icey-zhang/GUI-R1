@@ -28,25 +28,14 @@ ray.init()
 # 模型路径
 MODEL_PATH = ""
 
-# 推理参数
-SAMPLING_PARAMS = SamplingParams(
-    temperature=0.0,
-    top_p=0.001,
-    repetition_penalty=1.05,
-    max_tokens=1024,  # 根据需要调整最大生成长度
-    stop_token_ids=[],  # 停止标志
-)
-
 # 数据路径
 DATA_PATH = ""
 
-# 微批大小
-MICRO_BATCH = 24
-
 class MultiModalDataset(Dataset):
-    def __init__(self, data, processor):
+    def __init__(self, data, processor, max_pixels: int = 0):
         self.data = data
         self.processor = processor
+        self.max_pixels = max_pixels
 
     def __len__(self):
         return len(self.data)
@@ -60,6 +49,13 @@ class MultiModalDataset(Dataset):
             image = Image.open(image)
         else:
             raise ValueError("Unsupported image format. Expect {'bytes': ...} or image path.")
+        image = image.convert("RGB")
+        orig_width, orig_height = image.size
+        if self.max_pixels and (orig_width * orig_height > self.max_pixels):
+            scale = (self.max_pixels / float(orig_width * orig_height)) ** 0.5
+            new_w = max(1, int(orig_width * scale))
+            new_h = max(1, int(orig_height * scale))
+            image = image.resize((new_w, new_h), Image.BILINEAR)
         text = sample["instruction"]
         history="None" if 'history' not in sample else sample['history']
 
@@ -112,10 +108,8 @@ class MultiModalDataset(Dataset):
         # prompt.replace("<image>","<|vision_start|><|image_pad|><|vision_end|>")
 
         image_inputs, video_inputs, video_kwargs = process_vision_info(message, return_video_kwargs=True)
-        origin_height = image_inputs[0].size[1]
-        origin_width = image_inputs[0].size[0]
-
-        sample["image_size"]=[origin_width,origin_height]
+        # Keep original image size for downstream eval while allowing resized inference.
+        sample["image_size"] = [orig_width, orig_height]
 
         mm_data = {}
         if image_inputs is not None:
@@ -148,10 +142,12 @@ def custom_collate_fn(batch):
 
 @ray.remote(num_gpus=1)
 class Worker:
-    def __init__(self, model_path, sampling_params):
+    def __init__(self, model_path, sampling_params, max_model_len: int, gpu_memory_utilization: float):
         self.llm = LLM(
             model=model_path,
             limit_mm_per_prompt={"image": 1, "video": 1},
+            max_model_len=max_model_len,
+            gpu_memory_utilization=gpu_memory_utilization,
         )
         self.sampling_params = sampling_params
 
@@ -212,6 +208,13 @@ def main(args):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     data_chunks = [hf_dataset.from_dict(data[i::num_actors]) for i in range(num_actors)]
+    sampling_params = SamplingParams(
+        temperature=0.0,
+        top_p=0.001,
+        repetition_penalty=1.05,
+        max_tokens=args.max_tokens,
+        stop_token_ids=[],
+    )
 
     # 加载处理器
     processor = AutoProcessor.from_pretrained(MODEL_PATH)
@@ -219,13 +222,27 @@ def main(args):
     # processor.min_pixels=
 
     # 创建 8 个 Actor，每个 Actor 分配到一个 GPU
-    workers = [Worker.remote(MODEL_PATH, SAMPLING_PARAMS) for _ in range(num_actors)]
+    workers = [
+        Worker.remote(
+            MODEL_PATH,
+            sampling_params,
+            args.max_model_len,
+            args.gpu_memory_utilization,
+        )
+        for _ in range(num_actors)
+    ]
 
     # 使用 PyTorch Dataset 和 DataLoader
     futures = []
     for i, chunk in enumerate(data_chunks):
-        dataset = MultiModalDataset(chunk, processor)
-        dataloader = DataLoader(dataset, batch_size=MICRO_BATCH, shuffle=False, num_workers=4, collate_fn=custom_collate_fn)
+        dataset = MultiModalDataset(chunk, processor, max_pixels=args.max_pixels)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.micro_batch,
+            shuffle=False,
+            num_workers=args.num_workers,
+            collate_fn=custom_collate_fn,
+        )
         futures.append(workers[i].process_data.remote(dataloader))
 
     # 收集所有结果
@@ -244,5 +261,11 @@ if __name__ == "__main__":
     parser.add_argument('--data_path', type=str, default="<data_path>")
     parser.add_argument('--output_path', type=str, default='./outputs')
     parser.add_argument('--num_actor', type=int, default=8)
+    parser.add_argument('--micro_batch', type=int, default=2)
+    parser.add_argument('--num_workers', type=int, default=2)
+    parser.add_argument('--max_pixels', type=int, default=458752)  # 512x896
+    parser.add_argument('--max_model_len', type=int, default=4096)
+    parser.add_argument('--gpu_memory_utilization', type=float, default=0.72)
+    parser.add_argument('--max_tokens', type=int, default=512)
     args = parser.parse_args()
     main(args)
