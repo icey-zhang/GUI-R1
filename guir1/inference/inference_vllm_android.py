@@ -8,11 +8,11 @@ import ray
 import torch
 from torch.utils.data import Dataset, DataLoader
 import argparse
-import re
 from datasets import load_dataset
 from datasets import Dataset as hf_dataset
 from PIL import Image
 from io import BytesIO
+from verl.utils.reward_score.r1gui import extract_action, extract_coord, extract_input_text
 # 初始化 Ray
 ray.init()
 
@@ -34,51 +34,6 @@ DATA_PATH = ""
 # 微批大小
 MICRO_BATCH = 24
 
-def extract_action(content):
-    answer_tag_pattern = r'<answer>(.*?)</answer>'
-    action_pattern = r"'action':\s*'(\w+)'"
-    content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
-    if content_answer_match:
-        content_answer = content_answer_match.group(1).strip()
-        action_match = re.search(action_pattern, content_answer)
-        if action_match:
-            return action_match.group(1)
-    return None
-
-def extract_input_text(content):
-    answer_tag_pattern = r'<answer>(.*?)</answer>'
-    action_pattern = r"'input_text':\s*'(.*?)'"
-    content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
-    if content_answer_match:
-        content_answer = content_answer_match.group(1).strip()
-        action_match = re.search(action_pattern, content_answer)
-        if action_match:
-            return action_match.group(1)
-    return "no input text"
-
-
-def extract_coord(content):
-    # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
-    answer_tag_pattern = r'<answer>(.*?)</answer>'
-    bbox_pattern = r'\{.*\[(\d+),\s*(\d+)]\s*.*\}'
-    content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
-    try:
-        if content_answer_match:
-            content_answer = content_answer_match.group(1).strip()
-            coord_match = re.search(bbox_pattern, content_answer)
-            if coord_match:
-                coord = [int(coord_match.group(1)), int(coord_match.group(2))]
-                return coord, True
-        else:
-            coord_pattern = r'\{.*\((\d+),\s*(\d+))\s*.*\}'
-            coord_match = re.search(coord_pattern, content)
-            if coord_match:
-                coord = [int(coord_match.group(1)), int(coord_match.group(2))]
-                return coord, True
-        return [0, 0, 0, 0], False
-    except:
-        return [0, 0, 0, 0], False
-    
 class MultiModalDataset(Dataset):
     def __init__(self, data, processor):
         self.data = data
@@ -90,22 +45,41 @@ class MultiModalDataset(Dataset):
     def __getitem__(self, idx):
         sample = self.data[idx]
         image = sample["image"]
-        image = Image.open(BytesIO(image["bytes"]))
+        if isinstance(image, dict) and "bytes" in image:
+            image = Image.open(BytesIO(image["bytes"]))
+        elif isinstance(image, str):
+            image = Image.open(image)
+        else:
+            raise ValueError("Unsupported image format. Expect {'bytes': ...} or image path.")
         text = sample["instruction"]
         history="None" if 'history' not in sample else sample['history']
 
         # sys_prompt='''A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> nd <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>'''
         text=(
-            f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
-            "Please provide the action to perform (enumerate from ['wait', 'long_press', 'click', 'press_back', 'type', 'open_app', 'scroll']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
+            f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue "
+            f"executing the command '{text}', with the action history being '{history}'.\n"
+            "Please output exactly ONE action call using hm_data format.\n"
+            "All coordinates must be in 0-1000 relative coordinate system.\n"
             "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:\n"
-            "<think> ... </think> <answer>[{'action': enum['wait', 'long_press', 'click', 'press_back', 'type', 'open_app', 'scroll'], 'point': [x, y], 'input_text': 'no input text [default]'}]</answer>\n"
-            "Note:\n specific input text (no default) is necessary for actions enum['type', 'open_app', 'scroll'] \n Example:\n"
-            "[{'action': enum['wait', 'press_back'], 'point': [-100, -100], 'input_text': 'no input text'}]\n"
-            "[{'action': enum['click', 'long_press'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
-            "[{'action': enum['type', 'open_app'], 'point': [-100, -100], 'input_text': 'shanghai shopping mall'}]\n"
-            "[{'action': enum['scroll'], 'point': [-100, -100], 'input_text': enum['up', 'left', 'right', 'down']}]"
-            )
+            "<think> ... </think> <answer>action(params...)</answer>\n"
+            "Available actions and signatures:\n"
+            "click(point='x1,y1')\n"
+            "long_press(point='x1,y1')\n"
+            "type(content='')\n"
+            "swipe(start_point='x1,y1', end_point='x2,y2', velocity=600)\n"
+            "open_app(app_name='')\n"
+            "drag(start_point='x1,y1', end_point='x2,y2')\n"
+            "press_home()\n"
+            "press_back()\n"
+            "wait(t='t')\n"
+            "finished(content='')\n"
+            "call_user(content='')\n"
+            "back_information(content='')\n"
+            "Examples:\n"
+            "<answer>click(point='123,300')</answer>\n"
+            "<answer>type(content='蒜蓉小龙虾\\n')</answer>\n"
+            "<answer>finished(content='任务已完成')</answer>"
+        )
         text = '<image>\n' + text
         message = [
             # {"role":"system", "content": sys_prompt},
@@ -129,26 +103,9 @@ class MultiModalDataset(Dataset):
         # prompt.replace("<image>","<|vision_start|><|image_pad|><|vision_end|>")
 
         image_inputs, video_inputs, video_kwargs = process_vision_info(message, return_video_kwargs=True)
-
-        inputs = self.processor(
-                    text=[prompt],
-                    images=image_inputs,
-                    videos=video_inputs,
-                    padding=True,
-                    return_tensors="pt",
-                )
-        
-        resized_height = inputs['image_grid_thw'][0][1] * self.processor.image_processor.patch_size
-        resized_width = inputs['image_grid_thw'][0][2] * self.processor.image_processor.patch_size
-              
         origin_height = image_inputs[0].size[1]
         origin_width = image_inputs[0].size[0]
-        scale_x = origin_width / resized_width
-        scale_y = origin_height / resized_height
 
-        del inputs
-
-        sample["scale"]=[scale_x.item(),scale_y.item()]
         sample["image_size"]=[origin_width,origin_height]
 
         mm_data = {}
@@ -216,16 +173,13 @@ class Worker:
             
             for original_sample, output in zip(original_samples, outputs):
                 generated_text = output.outputs[0].text
-                gt_bbox = original_sample["gt_bbox"]
                 original_sample["pred"] = generated_text
                 pred_coord, _ = extract_coord(generated_text)
-                # original_sample["pred_coord"] = pred_coord
-                original_sample["pred_coord"] = [pred_coord[0]*original_sample["scale"][0],pred_coord[1]*original_sample["scale"][1]]
+                # Keep 0-1000 coordinate output to align with training/action format.
+                original_sample["pred_coord"] = [pred_coord[0], pred_coord[1]]
                 pred_action = extract_action(generated_text)
                 original_sample["pred_action"] = pred_action
                 original_sample["pred_input_text"]=extract_input_text(generated_text)
-                print(original_sample["pred_input_text"],original_sample["gt_input_text"])
-                original_sample["scale"]=[]
                 original_sample["image"]=''
                 results.append(original_sample)
 
