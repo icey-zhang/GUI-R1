@@ -62,7 +62,6 @@ def main() -> None:
     tokenizer = get_tokenizer(args.model_path, trust_remote_code=True)
     processor = get_processor(args.model_path, trust_remote_code=True)
 
-    min_pixels = None if args.min_pixels <= 0 else args.min_pixels
     dataset = RLHFDataset(
         data_path=args.data_path,
         tokenizer=tokenizer,
@@ -73,7 +72,7 @@ def main() -> None:
         max_prompt_length=args.probe_max_prompt_length,
         truncation="right",
         system_prompt="",
-        min_pixels=min_pixels,
+        min_pixels=max(0, int(args.min_pixels)),
         max_pixels=args.max_pixels,
     )
 
