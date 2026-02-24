@@ -39,7 +39,7 @@ fi
 # Auto merge FSDP sharded checkpoint to HuggingFace format.
 if [[ "${AUTO_MERGE}" == "1" ]] && compgen -G "${MODEL_PATH}/model_world_size_*_rank_0.pt" > /dev/null; then
   HF_DIR="${MODEL_PATH}/huggingface"
-  if [[ ! -f "${HF_DIR}/config.json" ]]; then
+  if ! compgen -G "${HF_DIR}/*.safetensors" > /dev/null && ! compgen -G "${HF_DIR}/pytorch_model*.bin" > /dev/null; then
     echo "Merging sharded checkpoint -> ${HF_DIR}"
     python scripts/model_merger.py --local_dir "${MODEL_PATH}"
   fi
