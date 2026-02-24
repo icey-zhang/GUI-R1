@@ -284,7 +284,7 @@ class RayPPOTrainer:
                 prompt_idx = min(prompt_count - 1, i // repeat_per_prompt)
                 p_text = self.tokenizer.decode(prompt_ids[prompt_idx], skip_special_tokens=True)
                 r_text = self.tokenizer.decode(response_ids[i], skip_special_tokens=True)
-                print(f"[TRAIN-DEBUG][{i}] prompt={p_text[:240]}", flush=True)
+                print(f"[TRAIN-DEBUG][{i}] prompt={p_text}", flush=True)
                 print(f"[TRAIN-DEBUG][{i}] response={r_text}", flush=True)
         except Exception as e:
             print(f"[TRAIN-DEBUG] print failed: {e}", flush=True)
