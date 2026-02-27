@@ -1,6 +1,6 @@
 # GUI-R1（Qwen3-VL 适配 + hm_data 训练）
 
-本仓库已适配 `Qwen3-VL`，并支持将 Open-AutoGLM 的 `hm_data` 转换为 GUI-R1/verl 可训练格式。
+本仓库已适配 `Qwen3-VL`，并支持将`hm_data` 转换为 GUI-R1/verl 可训练格式。
 
 ## 环境准备
 
