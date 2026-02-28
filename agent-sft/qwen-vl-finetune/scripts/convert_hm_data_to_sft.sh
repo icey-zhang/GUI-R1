@@ -17,6 +17,13 @@ RESPONSE_STYLE=${RESPONSE_STYLE:-answer_tag}
 CONV_STYLE=${CONV_STYLE:-chat}
 META_NAME=${META_NAME:-hm_data_sft_train}
 
+# Optional raw hm_data dir to locate trace.jsonl by image path.
+# Example: /root/workspace/datasets/hm_data/hm_data
+RAW_HM_DATA_DIR=${RAW_HM_DATA_DIR:-}
+
+# Thinking extraction priority in trace rows.
+THINKING_FIELDS=${THINKING_FIELDS:-thinking,explain,summary}
+
 mkdir -p "${SFT_DATA_DIR}"
 
 python ./scripts/convert_hm_data_to_sft.py \
@@ -25,7 +32,9 @@ python ./scripts/convert_hm_data_to_sft.py \
   --output_dir "${SFT_DATA_DIR}" \
   --response_style "${RESPONSE_STYLE}" \
   --conv_style "${CONV_STYLE}" \
-  --meta_name "${META_NAME}"
+  --meta_name "${META_NAME}" \
+  --raw_hm_data_dir "${RAW_HM_DATA_DIR}" \
+  --thinking_fields "${THINKING_FIELDS}"
 
 echo "Done."
 echo "train_sft: ${SFT_DATA_DIR}/train_sft.jsonl"

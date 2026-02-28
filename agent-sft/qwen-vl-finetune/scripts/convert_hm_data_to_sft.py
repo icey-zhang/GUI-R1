@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Optional, Sequence
 
 
 def read_jsonl(path: Path) -> list[Dict[str, Any]]:
@@ -23,6 +24,17 @@ def write_jsonl(path: Path, rows: Iterable[Dict[str, Any]]) -> int:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
             n += 1
     return n
+
+
+def _clean_thinking(text: str) -> str:
+    s = str(text or "").strip()
+    if not s:
+        return ""
+    # avoid breaking output tag structure
+    s = re.sub(r"</?thinking>", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"</?think>", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"</?answer>", "", s, flags=re.IGNORECASE)
+    return s.strip()
 
 
 def _stringify_history(history: Any) -> str:
@@ -55,19 +67,93 @@ def _safe_action_call(row: Dict[str, Any]) -> str:
     return "wait(t='1')"
 
 
-def _build_assistant_response(row: Dict[str, Any], response_style: str) -> str:
+def _build_assistant_response(row: Dict[str, Any], response_style: str, thinking_text: str) -> str:
     action_call = _safe_action_call(row)
     if response_style == "action_only":
         return action_call
-    return f"<thinking></thinking><answer>{action_call}</answer>"
+    return f"<thinking>{thinking_text}</thinking><answer>{action_call}</answer>"
 
 
-def convert_row(row: Dict[str, Any], response_style: str) -> Optional[Dict[str, Any]]:
+class ThinkingResolver:
+    def __init__(self, raw_hm_data_dir: Optional[Path], thinking_fields: Sequence[str]):
+        self.raw_hm_data_dir = raw_hm_data_dir
+        self.thinking_fields = [f.strip() for f in thinking_fields if str(f).strip()]
+        self.trace_cache: Dict[str, Dict[int, Dict[str, Any]]] = {}
+
+    def _parse_step(self, image_path: Path, row: Dict[str, Any]) -> Optional[int]:
+        source_step = row.get("source_step")
+        if source_step is not None:
+            try:
+                return int(source_step)
+            except Exception:
+                pass
+        m = re.match(r"step_(\d+)$", image_path.stem)
+        if m:
+            try:
+                return int(m.group(1))
+            except Exception:
+                return None
+        return None
+
+    def _locate_trace(self, image_path: Path) -> Optional[Path]:
+        # Most converted samples store absolute image path under episode dir.
+        cand = image_path.parent / "trace.jsonl"
+        if cand.exists():
+            return cand
+
+        if self.raw_hm_data_dir is not None:
+            episode_name = image_path.parent.name
+            cand2 = self.raw_hm_data_dir / episode_name / "trace.jsonl"
+            if cand2.exists():
+                return cand2
+        return None
+
+    def _load_trace_index(self, trace_path: Path) -> Dict[int, Dict[str, Any]]:
+        cache_key = str(trace_path.resolve())
+        if cache_key in self.trace_cache:
+            return self.trace_cache[cache_key]
+
+        idx: Dict[int, Dict[str, Any]] = {}
+        for row in read_jsonl(trace_path):
+            try:
+                step = int(row.get("step"))
+            except Exception:
+                continue
+            idx[step] = row
+        self.trace_cache[cache_key] = idx
+        return idx
+
+    def find_thinking(self, image: str, row: Dict[str, Any]) -> str:
+        if not image:
+            return ""
+        image_path = Path(str(image)).expanduser()
+        step = self._parse_step(image_path=image_path, row=row)
+        if step is None:
+            return ""
+
+        trace_path = self._locate_trace(image_path=image_path)
+        if trace_path is None:
+            return ""
+
+        trace_idx = self._load_trace_index(trace_path=trace_path)
+        trace_row = trace_idx.get(step)
+        if not isinstance(trace_row, dict):
+            return ""
+
+        for field in self.thinking_fields:
+            value = _clean_thinking(trace_row.get(field, ""))
+            if value:
+                return value
+        return ""
+
+
+def convert_row(row: Dict[str, Any], response_style: str, thinking_resolver: ThinkingResolver) -> Optional[Dict[str, Any]]:
     image = row.get("image", "")
     if not image:
         return None
     user_text = _build_user_prompt(row.get("instruction", ""), row.get("history", "None"))
-    assistant_text = _build_assistant_response(row, response_style=response_style)
+    thinking_text = thinking_resolver.find_thinking(image=str(image), row=row)
+    assistant_text = _build_assistant_response(row, response_style=response_style, thinking_text=thinking_text)
     return {
         "image": str(image),
         "conversations": [
@@ -77,14 +163,21 @@ def convert_row(row: Dict[str, Any], response_style: str) -> Optional[Dict[str, 
     }
 
 
-def convert_split(in_path: Path, out_path: Path, response_style: str) -> int:
+def convert_split(in_path: Path, out_path: Path, response_style: str, thinking_resolver: ThinkingResolver) -> tuple[int, int]:
     rows = read_jsonl(in_path)
     converted = []
+    thinking_hit = 0
     for row in rows:
-        out = convert_row(row, response_style=response_style)
+        out = convert_row(row, response_style=response_style, thinking_resolver=thinking_resolver)
         if out is not None:
             converted.append(out)
-    return write_jsonl(out_path, converted)
+            try:
+                assistant = out["conversations"][1]["value"]
+            except Exception:
+                assistant = ""
+            if "<thinking></thinking>" not in assistant:
+                thinking_hit += 1
+    return write_jsonl(out_path, converted), thinking_hit
 
 
 def main():
@@ -101,21 +194,41 @@ def main():
     )
     parser.add_argument("--conv_style", type=str, default="chat", help="conv_style in generated meta.")
     parser.add_argument("--meta_name", type=str, default="hm_data_sft_train", help="Dataset key in meta json.")
+    parser.add_argument(
+        "--raw_hm_data_dir",
+        type=str,
+        default="",
+        help="Optional raw hm_data dir for trace lookup fallback. Example: /root/workspace/datasets/hm_data/hm_data",
+    )
+    parser.add_argument(
+        "--thinking_fields",
+        type=str,
+        default="thinking,explain,summary",
+        help="Comma-separated field priority when extracting thinking from trace rows.",
+    )
     args = parser.parse_args()
 
     train_jsonl = Path(args.train_jsonl).expanduser().resolve()
     test_jsonl = Path(args.test_jsonl).expanduser().resolve() if args.test_jsonl else None
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    raw_hm_data_dir = Path(args.raw_hm_data_dir).expanduser().resolve() if args.raw_hm_data_dir else None
+    thinking_fields = [x.strip() for x in args.thinking_fields.split(",") if x.strip()]
+    thinking_resolver = ThinkingResolver(raw_hm_data_dir=raw_hm_data_dir, thinking_fields=thinking_fields)
 
     train_out = output_dir / "train_sft.jsonl"
-    train_n = convert_split(train_jsonl, train_out, response_style=args.response_style)
+    train_n, train_thinking_hit = convert_split(
+        train_jsonl, train_out, response_style=args.response_style, thinking_resolver=thinking_resolver
+    )
 
     test_out = None
     test_n = 0
+    test_thinking_hit = 0
     if test_jsonl is not None and test_jsonl.exists():
         test_out = output_dir / "test_sft.jsonl"
-        test_n = convert_split(test_jsonl, test_out, response_style=args.response_style)
+        test_n, test_thinking_hit = convert_split(
+            test_jsonl, test_out, response_style=args.response_style, thinking_resolver=thinking_resolver
+        )
 
     meta = {
         args.meta_name: {
@@ -143,8 +256,12 @@ def main():
 
     print(f"train_in: {train_jsonl}")
     print(f"train_out: {train_out} ({train_n})")
+    if args.response_style == "answer_tag":
+        print(f"train_thinking_found: {train_thinking_hit}/{train_n}")
     if test_out is not None:
         print(f"test_out: {test_out} ({test_n})")
+        if args.response_style == "answer_tag":
+            print(f"test_thinking_found: {test_thinking_hit}/{test_n}")
     print(f"meta_train: {meta_path}")
 
 
