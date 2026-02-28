@@ -48,12 +48,59 @@ def _stringify_history(history: Any) -> str:
     return text if text else "None"
 
 
-def _build_user_prompt(instruction: str, history: Any) -> str:
+def _build_user_prompt(instruction: str, history: Any, task_type: str = "high") -> str:
     instruction = str(instruction or "请完成当前界面任务。").strip()
     if not instruction:
         instruction = "请完成当前界面任务。"
     history_text = _stringify_history(history)
-    return f"<image>\nInstruction: {instruction}\nPrevious actions: {history_text}"
+    task_type = str(task_type or "high").strip().lower()
+    if task_type == "high":
+        action_space = [
+            "click",
+            "long_press",
+            "type",
+            "swipe",
+            "open_app",
+            "drag",
+            "press_home",
+            "press_back",
+            "wait",
+            "finished",
+            "call_user",
+            "back_information",
+        ]
+        return (
+            f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue "
+            f"executing the command '{instruction}', with the action history being '{history_text}'.\n"
+            f"Please output exactly ONE action call from {action_space} using hm_data format.\n"
+            "All coordinates must be in 0-1000 relative coordinate system.\n"
+            "Output the thinking process in <thinking> </thinking> tags, and the final answer in <answer> </answer> tags as "
+            "follows:\n"
+            "<thinking> ... </thinking> <answer>action(params...)</answer>\n"
+            "Available actions and signatures:\n"
+            "click(point='x1,y1')\n"
+            "long_press(point='x1,y1')\n"
+            "type(content='')\n"
+            "swipe(start_point='x1,y1', end_point='x2,y2', velocity=600)\n"
+            "open_app(app_name='')\n"
+            "drag(start_point='x1,y1', end_point='x2,y2')\n"
+            "press_home()\n"
+            "press_back()\n"
+            "wait(t='t')\n"
+            "finished(content='')\n"
+            "call_user(content='')\n"
+            "back_information(content='')"
+        )
+
+    return (
+        f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue "
+        f"executing the command '{instruction}', with the action history being '{history_text}'.\n"
+        "Please output exactly one action call in hm_data format.\n"
+        "Coordinates must be in 0-1000 relative coordinate system.\n"
+        "Output the thinking process in <thinking> </thinking> tags, and the final answer in <answer> </answer> tags as "
+        "follows:\n"
+        "<thinking> ... </thinking> <answer>click(point='x1,y1')</answer>\n"
+    )
 
 
 def _safe_action_call(row: Dict[str, Any]) -> str:
@@ -151,7 +198,11 @@ def convert_row(row: Dict[str, Any], response_style: str, thinking_resolver: Thi
     image = row.get("image", "")
     if not image:
         return None
-    user_text = _build_user_prompt(row.get("instruction", ""), row.get("history", "None"))
+    user_text = _build_user_prompt(
+        row.get("instruction", ""),
+        row.get("history", "None"),
+        task_type=str(row.get("task_type", "high")),
+    )
     thinking_text = thinking_resolver.find_thinking(image=str(image), row=row)
     assistant_text = _build_assistant_response(row, response_style=response_style, thinking_text=thinking_text)
     return {
