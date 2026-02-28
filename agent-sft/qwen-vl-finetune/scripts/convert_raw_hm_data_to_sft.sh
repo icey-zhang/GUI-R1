@@ -16,7 +16,17 @@ CONV_STYLE=${CONV_STYLE:-chat}
 META_NAME=${META_NAME:-hm_data_raw_sft_train}
 RESPONSE_STYLE=${RESPONSE_STYLE:-answer_tag}
 
+# Optional: align split with existing GRPO split files.
+USE_GRPO_SPLIT=${USE_GRPO_SPLIT:-1}
+GRPO_TRAIN_JSONL=${GRPO_TRAIN_JSONL:-/root/workspace/datasets/hm_data_converted/train.jsonl}
+GRPO_TEST_JSONL=${GRPO_TEST_JSONL:-/root/workspace/datasets/hm_data_converted/test.jsonl}
+
 mkdir -p "${SFT_DATA_DIR}"
+
+EXTRA_ARGS=""
+if [[ "${USE_GRPO_SPLIT}" == "1" ]] && [[ -f "${GRPO_TRAIN_JSONL}" ]] && [[ -f "${GRPO_TEST_JSONL}" ]]; then
+  EXTRA_ARGS="--grpo_train_jsonl ${GRPO_TRAIN_JSONL} --grpo_test_jsonl ${GRPO_TEST_JSONL}"
+fi
 
 python ./scripts/convert_raw_hm_data_to_sft.py \
   --input_dir "${INPUT_DIR}" \
@@ -25,7 +35,8 @@ python ./scripts/convert_raw_hm_data_to_sft.py \
   --seed "${SEED}" \
   --conv_style "${CONV_STYLE}" \
   --meta_name "${META_NAME}" \
-  --response_style "${RESPONSE_STYLE}"
+  --response_style "${RESPONSE_STYLE}" \
+  ${EXTRA_ARGS}
 
 echo "Done."
 echo "train_sft: ${SFT_DATA_DIR}/train_sft.jsonl"
