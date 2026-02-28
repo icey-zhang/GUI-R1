@@ -421,7 +421,11 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
                 return 0.0
             return 1.0 if abs(pred_t - gt_t) <= 0.5 else 0.0
 
-        if pred_action in {"finished", "call_user", "back_information"}:
+        if pred_action == "finished":
+            # For finished, content wording can vary a lot and should not block action accuracy.
+            return 1.0
+
+        if pred_action in {"call_user", "back_information"}:
             pred_content = pred_params.get("content", "")
             gt_content = gt_params.get("content", gt_input_text)
             return 1.0 if calculate_f1_score(pred_content, gt_content) >= 0.5 else 0.0
